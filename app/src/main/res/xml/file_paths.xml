@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Fotos de las notas en almacenamiento interno; se comparten con la app
+         de cámara solo para que escriba la captura. -->
+    <files-path
+        name="note_images"
+        path="note_images/" />
+</paths>
