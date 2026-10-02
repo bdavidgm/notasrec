@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Notas</string>
+    <string name="app_name">Notasrec</string>
     <string name="fab_new_note">+</string>
     <string name="cd_choose_note_type">Elegir tipo de nota</string>
     <string name="cd_close_note_type">Cerrar</string>
