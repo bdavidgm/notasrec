@@ -554,6 +554,7 @@ fun DetailScreen(
             note = note,
             tags = nwt?.tags.orEmpty(),
             isEditing = isEditing,
+            onEditReminder = { showReminderDialog = true },
             modifier = Modifier
                 .fillMaxSize()
                 // El inferior lo aplica el cuerpo con ime ∪ navigationBars. Si aquí
@@ -576,6 +577,7 @@ private fun DetailNoteBody(
     note: NoteEntity,
     tags: List<TagEntity>,
     isEditing: Boolean,
+    onEditReminder: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val removeTag = remember(viewModel) { viewModel::removeTag }
@@ -625,7 +627,13 @@ private fun DetailNoteBody(
             )
             note.reminderAtMillis?.let { at ->
                 Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onEditReminder)
+                        .padding(vertical = 4.dp),
+                ) {
                     Icon(
                         imageVector = Icons.Filled.Notifications,
                         contentDescription = stringResource(R.string.cd_reminder),
