@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
@@ -524,180 +523,199 @@ private fun NoteListItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         border = BorderStroke(1.dp, Celeste.copy(alpha = 0.55f)),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 4.dp, horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(start = 12.dp, top = 8.dp, end = 4.dp, bottom = 8.dp),
         ) {
-            if (item.hasChildren) {
-                IconButton(onClick = { onToggleExpanded(noteId) }) {
-                    Icon(
-                        imageVector = if (item.expanded) {
-                            Icons.Filled.KeyboardArrowDown
-                        } else {
-                            Icons.AutoMirrored.Filled.KeyboardArrowRight
-                        },
-                        contentDescription = stringResource(
-                            if (item.expanded) {
-                                R.string.cd_collapse_children
-                            } else {
-                                R.string.cd_expand_children
-                            },
-                        ),
-                        tint = NegroTexto,
-                    )
-                }
-            }
-            Column(
+            // Fila 1: tipo / recordatorio + título
+            Row(
                 modifier = Modifier
-                    .weight(1f)
+                    .fillMaxWidth()
                     .clickable(onClick = { onOpenNote(noteId) })
-                    .padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+                    .padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (item.checklist) {
-                        Icon(
-                            imageVector = Icons.Filled.CheckBox,
-                            contentDescription = stringResource(R.string.cd_checklist_note),
-                            tint = CelesteOscuro,
-                            modifier = Modifier
-                                .padding(end = 6.dp)
-                                .size(18.dp),
-                        )
-                    }
-                    if (item.audio) {
-                        Icon(
-                            imageVector = Icons.Filled.Mic,
-                            contentDescription = stringResource(R.string.cd_audio_note),
-                            tint = CelesteOscuro,
-                            modifier = Modifier
-                                .padding(end = 6.dp)
-                                .size(18.dp),
-                        )
-                    }
-                    if (item.hasReminder) {
-                        Icon(
-                            imageVector = Icons.Filled.Notifications,
-                            contentDescription = stringResource(R.string.cd_reminder),
-                            tint = CelesteOscuro,
-                            modifier = Modifier
-                                .padding(end = 6.dp)
-                                .size(18.dp),
-                        )
-                    }
-                    Text(
-                        text = titleText,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
+                if (item.checklist) {
+                    Icon(
+                        imageVector = Icons.Filled.CheckBox,
+                        contentDescription = stringResource(R.string.cd_checklist_note),
+                        tint = CelesteOscuro,
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(18.dp),
                     )
                 }
-                if (item.tagNames.isNotEmpty()) {
-                    Row(
+                if (item.audio) {
+                    Icon(
+                        imageVector = Icons.Filled.Mic,
+                        contentDescription = stringResource(R.string.cd_audio_note),
+                        tint = CelesteOscuro,
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 6.dp)
-                            .clipToBounds()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            .padding(end = 6.dp)
+                            .size(18.dp),
+                    )
+                }
+                if (item.hasReminder) {
+                    Icon(
+                        imageVector = Icons.Filled.Notifications,
+                        contentDescription = stringResource(R.string.cd_reminder),
+                        tint = CelesteOscuro,
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(18.dp),
+                    )
+                }
+                Text(
+                    text = titleText,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            // Fila 2: expandir/comprimir · fecha · + · eliminar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (item.hasChildren) {
+                    IconButton(
+                        onClick = { onToggleExpanded(noteId) },
+                        modifier = Modifier.size(32.dp),
                     ) {
-                        item.tagNames.forEach { name ->
-                            Surface(
-                                color = Celeste,
-                                shape = RoundedCornerShape(16.dp),
-                            ) {
-                                Text(
-                                    text = name,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = NegroTexto,
-                                    maxLines = 1,
-                                )
-                            }
-                        }
+                        Icon(
+                            imageVector = if (item.expanded) {
+                                Icons.Filled.KeyboardArrowDown
+                            } else {
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight
+                            },
+                            contentDescription = stringResource(
+                                if (item.expanded) {
+                                    R.string.cd_collapse_children
+                                } else {
+                                    R.string.cd_expand_children
+                                },
+                            ),
+                            tint = NegroTexto,
+                        )
                     }
                 }
                 Text(
                     text = item.timeLabel,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-                    modifier = Modifier.padding(top = 4.dp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(onClick = { onOpenNote(noteId) })
+                        .padding(vertical = 2.dp),
                 )
-            }
-            Box {
-                IconButton(onClick = { childMenuOpen = true }) {
-                    Icon(
-                        imageVector = Icons.Filled.Add,
-                        contentDescription = stringResource(R.string.cd_add_child_note),
-                        tint = NegroTexto,
-                    )
+                Box {
+                    IconButton(
+                        onClick = { childMenuOpen = true },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = stringResource(R.string.cd_add_child_note),
+                            tint = NegroTexto,
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = childMenuOpen,
+                        onDismissRequest = { childMenuOpen = false },
+                        containerColor = Color.White,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Celeste),
+                    ) {
+                        val itemColors = MenuDefaults.itemColors(
+                            textColor = NegroTexto,
+                            leadingIconColor = CelesteOscuro,
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.fab_new_text_note)) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Notes,
+                                    contentDescription = null,
+                                )
+                            },
+                            colors = itemColors,
+                            onClick = {
+                                childMenuOpen = false
+                                onCreateChild(noteId, NoteKind.TEXT)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.fab_new_checklist_note)) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Filled.CheckBox,
+                                    contentDescription = null,
+                                )
+                            },
+                            colors = itemColors,
+                            onClick = {
+                                childMenuOpen = false
+                                onCreateChild(noteId, NoteKind.CHECKLIST)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.fab_new_audio_note)) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Filled.Mic,
+                                    contentDescription = null,
+                                )
+                            },
+                            colors = itemColors,
+                            onClick = {
+                                childMenuOpen = false
+                                onCreateChild(noteId, NoteKind.AUDIO)
+                            },
+                        )
+                    }
                 }
-                DropdownMenu(
-                    expanded = childMenuOpen,
-                    onDismissRequest = { childMenuOpen = false },
-                    containerColor = Color.White,
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, Celeste),
+                IconButton(
+                    onClick = { onRequestDelete(noteId, titleText, item.hasChildren) },
+                    modifier = Modifier.size(32.dp),
                 ) {
-                    val itemColors = MenuDefaults.itemColors(
-                        textColor = NegroTexto,
-                        leadingIconColor = CelesteOscuro,
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.fab_new_text_note)) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Notes,
-                                contentDescription = null,
-                            )
-                        },
-                        colors = itemColors,
-                        onClick = {
-                            childMenuOpen = false
-                            onCreateChild(noteId, NoteKind.TEXT)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.fab_new_checklist_note)) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.CheckBox,
-                                contentDescription = null,
-                            )
-                        },
-                        colors = itemColors,
-                        onClick = {
-                            childMenuOpen = false
-                            onCreateChild(noteId, NoteKind.CHECKLIST)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.fab_new_audio_note)) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.Mic,
-                                contentDescription = null,
-                            )
-                        },
-                        colors = itemColors,
-                        onClick = {
-                            childMenuOpen = false
-                            onCreateChild(noteId, NoteKind.AUDIO)
-                        },
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = stringResource(R.string.cd_delete_note),
+                        tint = MaterialTheme.colorScheme.error,
                     )
                 }
             }
-            IconButton(
-                onClick = { onRequestDelete(noteId, titleText, item.hasChildren) },
-                modifier = Modifier.widthIn(min = 48.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = stringResource(R.string.cd_delete_note),
-                    tint = MaterialTheme.colorScheme.error,
-                )
+
+            // Fila 3: etiquetas a todo el ancho
+            if (item.tagNames.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 0.dp, end = 8.dp)
+                        .clipToBounds()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    item.tagNames.forEach { name ->
+                        Surface(
+                            color = Celeste,
+                            shape = RoundedCornerShape(16.dp),
+                        ) {
+                            Text(
+                                text = name,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = NegroTexto,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
