@@ -7,6 +7,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +39,8 @@ import com.bdavidgm.notasrec.ui.detail.DetailScreen
 import com.bdavidgm.notasrec.ui.detail.DetailViewModel
 import com.bdavidgm.notasrec.ui.home.HomeScreen
 import com.bdavidgm.notasrec.ui.home.HomeViewModel
+import com.bdavidgm.notasrec.ui.reminders.RemindersScreen
+import com.bdavidgm.notasrec.ui.reminders.RemindersViewModel
 import com.bdavidgm.notasrec.ui.tagcloud.TagCloudScreen
 import com.bdavidgm.notasrec.ui.tagcloud.TagCloudViewModel
 import com.bdavidgm.notasrec.ui.theme.Celeste
@@ -47,6 +50,7 @@ import kotlinx.coroutines.launch
 
 private const val ROUTE_HOME = "home"
 private const val ROUTE_TAG_CLOUD = "tagCloud"
+private const val ROUTE_REMINDERS = "reminders"
 
 @Composable
 fun NotasNavHost(
@@ -62,7 +66,9 @@ fun NotasNavHost(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val drawerGesturesEnabled =
-        currentRoute == ROUTE_HOME || currentRoute == ROUTE_TAG_CLOUD
+        currentRoute == ROUTE_HOME ||
+            currentRoute == ROUTE_TAG_CLOUD ||
+            currentRoute == ROUTE_REMINDERS
 
     // Shared across Home ↔ TagCloud so "Ir" can apply filters on the same HomeViewModel.
     val activity = LocalActivity.current as ComponentActivity
@@ -148,6 +154,23 @@ fun NotasNavHost(
                     ),
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                 )
+                NavigationDrawerItem(
+                    label = { Text(stringResource(R.string.drawer_reminders)) },
+                    selected = currentRoute == ROUTE_REMINDERS,
+                    onClick = { navigateDrawer(ROUTE_REMINDERS) },
+                    icon = {
+                        Icon(Icons.Filled.Notifications, contentDescription = null)
+                    },
+                    colors = NavigationDrawerItemDefaults.colors(
+                        selectedContainerColor = Celeste,
+                        unselectedContainerColor = CelesteClaro.copy(alpha = 0.35f),
+                        selectedTextColor = NegroTexto,
+                        unselectedTextColor = NegroTexto,
+                        selectedIconColor = NegroTexto,
+                        unselectedIconColor = NegroTexto,
+                    ),
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+                )
             }
         },
     ) {
@@ -184,6 +207,24 @@ fun NotasNavHost(
                             launchSingleTop = true
                         }
                     },
+                )
+            }
+            composable(ROUTE_REMINDERS) {
+                val remindersVm: RemindersViewModel = viewModel(
+                    factory = RemindersViewModel.factory(repository),
+                )
+                RemindersScreen(
+                    viewModel = remindersVm,
+                    navigationIcon = {
+                        IconButton(onClick = ::openDrawer) {
+                            Icon(
+                                imageVector = Icons.Filled.Menu,
+                                contentDescription = stringResource(R.string.cd_open_drawer),
+                                tint = NegroTexto,
+                            )
+                        }
+                    },
+                    onOpenNote = { id -> navController.navigate("detail/$id") },
                 )
             }
             composable(

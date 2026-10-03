@@ -50,6 +50,8 @@ class NotasRepository(
     fun observeNoteWithTags(noteId: Long): Flow<NoteWithTags?> =
         dao.observeNoteTagJoinRowsForNote(noteId).map { it.toSingleNoteWithTags() }
 
+    fun observeNotesWithReminders(): Flow<List<NoteEntity>> = dao.observeNotesWithReminders()
+
     fun observeAllTags(): Flow<List<TagEntity>> = dao.observeAllTags()
 
     /** Notas candidatas para el diálogo de enlace interno (excluye [excludeNoteId]). */

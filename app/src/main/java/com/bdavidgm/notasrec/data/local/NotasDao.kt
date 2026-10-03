@@ -68,6 +68,15 @@ interface NotasDao {
     )
     suspend fun getNotesWithFutureReminders(nowMillis: Long): List<NoteEntity>
 
+    @Query(
+        """
+        SELECT * FROM notes
+        WHERE reminderAtMillis IS NOT NULL
+        ORDER BY reminderAtMillis ASC
+        """,
+    )
+    fun observeNotesWithReminders(): Flow<List<NoteEntity>>
+
     /**
      * Candidatas para enlazar: título/contenido que coincidan, excluyendo la nota
      * actual. El diálogo solo necesita id, uid y título.
