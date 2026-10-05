@@ -82,8 +82,10 @@ import java.io.File
  * `BasicTextField` no admite contenido en línea, así que ningún editor rich-text
  * de Compose (tampoco compose-rich-editor 1.2.0) puede pintar una imagen dentro
  * del campo: la librería solo las dibuja en su vista de lectura. Por eso el
- * cuerpo se parte en bloques —texto editable y fotos como composables reales— y
- * se vuelve a unir en Markdown para guardar.
+ * cuerpo se parte en bloques —texto editable (multilínea) y fotos como
+ * composables reales— solo en los límites de imagen, y se vuelve a unir en
+ * Markdown para guardar. Así se puede seleccionar varias líneas y las listas
+ * numeradas continúan al pulsar Enter.
  */
 private sealed interface BodyBlock {
     val id: Long
@@ -144,7 +146,7 @@ private class BodyTextHandle(
     val replace: (markdown: String, cursor: Int) -> Unit,
 )
 
-/** A dónde llevar el cursor tras partir o unir una línea. */
+/** A dónde llevar el cursor tras insertar una foto o unir bloques. */
 private data class LineFocus(val id: Long, val offset: Int)
 
 private class BodyBlocksState(initialMarkdown: String) {
@@ -162,19 +164,11 @@ private class BodyBlocksState(initialMarkdown: String) {
         val parsed = parseBodyBlocks(markdown, ::newId)
         blocks.clear()
         markdownById.clear()
+        handles.clear()
         parsed.forEach { block ->
-            if (block is BodyBlock.Text && '\n' in block.markdown) {
-                // Una línea = un campo. Si todo el cuerpo fuera un solo editor,
-                // cada tecla reconstruiría y volvería a maquetar la nota entera.
-                block.markdown.split('\n').forEach { line ->
-                    addText(line)
-                }
-            } else {
-                if (block is BodyBlock.Text) {
-                    addText(block.markdown)
-                } else {
-                    blocks.add(block)
-                }
+            when (block) {
+                is BodyBlock.Text -> addText(block.markdown)
+                is BodyBlock.Photo -> blocks.add(block)
             }
         }
     }
@@ -186,7 +180,7 @@ private class BodyBlocksState(initialMarkdown: String) {
     /** Volcado en vivo (salir de la nota, cambiar de modo). */
     fun currentMarkdown(): String = join(live = true)
 
-    /** Lo ya serializado, sin volver a convertir cada línea a Markdown. */
+    /** Lo ya serializado, sin volver a convertir cada bloque a Markdown. */
     fun cachedMarkdown(): String = join(live = false)
 
     fun updateText(id: Long, markdown: String) {
@@ -194,26 +188,9 @@ private class BodyBlocksState(initialMarkdown: String) {
     }
 
     /**
-     * El usuario pulsó Enter (o pegó varias líneas). [lines] son las líneas que
-     * quedan por debajo de la actual. Devuelve el foco de la última.
+     * Retroceso al principio de un tramo de texto: une con el tramo anterior
+     * (p. ej. tras borrar una foto y quedar dos editores contiguos).
      */
-    fun insertLinesAfter(id: Long, firstLine: String, lines: List<String>): LineFocus? {
-        if (lines.isEmpty()) return null
-        val index = blocks.indexOfFirst { it.id == id }
-        if (index < 0) return null
-        markdownById[id] = firstLine
-        var at = index + 1
-        var lastId = id
-        for (line in lines) {
-            val block = addText(line, at)
-            at++
-            lastId = block.id
-        }
-        val offset = if (lines.size > 1) lines.last().length else 0
-        return LineFocus(lastId, offset)
-    }
-
-    /** Retroceso al principio de la línea: une con la línea de texto anterior. */
     fun mergeWithPrevious(id: Long): LineFocus? {
         val index = blocks.indexOfFirst { it.id == id }
         if (index <= 0) return null
@@ -221,7 +198,11 @@ private class BodyBlocksState(initialMarkdown: String) {
         val previous = blocks[index - 1] as? BodyBlock.Text ?: return null
         val previousText = textOf(previous, live = true)
         val currentText = textOf(current, live = true)
-        val merged = previousText + currentText
+        val merged = when {
+            previousText.isEmpty() -> currentText
+            currentText.isEmpty() -> previousText
+            else -> previousText + "\n" + currentText
+        }
         val cursor = previousText.length
         markdownById[previous.id] = merged
         handles[previous.id]?.replace?.invoke(merged, cursor)
@@ -232,9 +213,11 @@ private class BodyBlocksState(initialMarkdown: String) {
     }
 
     fun remove(id: Long) {
+        val index = blocks.indexOfFirst { it.id == id }
         blocks.removeAll { it.id == id }
         handles.remove(id)
         markdownById.remove(id)
+        if (index >= 0) coalesceAdjacentTextAt(index.coerceAtMost(blocks.lastIndex.coerceAtLeast(0)))
     }
 
     /**
@@ -253,12 +236,39 @@ private class BodyBlocksState(initialMarkdown: String) {
         }
 
         // Ids nuevos: el bloque partido se recompone desde su Markdown.
-        addText(split.first.trim(), index)
+        addText(split.first.trimEnd(), index)
         blocks.removeAt(index + 1)
         markdownById.remove(removedId)
         handles.remove(removedId)
         blocks.add(index + 1, photo)
-        return addText(split.second.trim(), index + 2).id
+        return addText(split.second.trimStart(), index + 2).id
+    }
+
+    /** Tras quitar una foto, funde los dos tramos de texto que quedan juntos. */
+    private fun coalesceAdjacentTextAt(index: Int) {
+        if (blocks.isEmpty()) return
+        val at = index.coerceIn(0, blocks.lastIndex)
+        val leftIndex = when {
+            blocks[at] is BodyBlock.Text && at > 0 && blocks[at - 1] is BodyBlock.Text -> at - 1
+            at < blocks.lastIndex &&
+                blocks[at] is BodyBlock.Text &&
+                blocks[at + 1] is BodyBlock.Text -> at
+            else -> return
+        }
+        val left = blocks[leftIndex] as BodyBlock.Text
+        val right = blocks[leftIndex + 1] as BodyBlock.Text
+        val leftText = textOf(left, live = true)
+        val rightText = textOf(right, live = true)
+        val merged = when {
+            leftText.isEmpty() -> rightText
+            rightText.isEmpty() -> leftText
+            else -> leftText.trimEnd() + "\n\n" + rightText.trimStart()
+        }
+        markdownById[left.id] = merged
+        handles[left.id]?.replace?.invoke(merged, merged.length.coerceAtMost(leftText.length))
+        blocks.removeAt(leftIndex + 1)
+        markdownById.remove(right.id)
+        handles.remove(right.id)
     }
 
     private fun addText(markdown: String, at: Int = blocks.size): BodyBlock.Text {
@@ -270,24 +280,15 @@ private class BodyBlocksState(initialMarkdown: String) {
 
     private fun join(live: Boolean): String {
         val parts = mutableListOf<String>()
-        val lines = mutableListOf<String>()
-        fun flush() {
-            if (lines.isEmpty()) return
-            if (lines.any { it.isNotBlank() }) {
-                parts += lines.joinToString("\n")
-            }
-            lines.clear()
-        }
         for (block in blocks) {
             when (block) {
-                is BodyBlock.Text -> lines += textOf(block, live)
-                is BodyBlock.Photo -> {
-                    flush()
-                    parts += block.toMarkdown()
+                is BodyBlock.Text -> {
+                    val text = textOf(block, live)
+                    if (text.isNotBlank()) parts += text
                 }
+                is BodyBlock.Photo -> parts += block.toMarkdown()
             }
         }
-        flush()
         return parts.joinToString("\n\n")
     }
 
@@ -460,10 +461,6 @@ internal fun RichMarkdownDraftEditor(viewModel: DetailViewModel) {
                             body.updateText(block.id, markdown)
                             push()
                         },
-                        onSplitLines = { firstLine, lines ->
-                            pendingFocus = body.insertLinesAfter(block.id, firstLine, lines)
-                            push()
-                        },
                         onBackspaceAtStart = {
                             pendingFocus = body.mergeWithPrevious(block.id)
                             push()
@@ -496,7 +493,6 @@ private fun BodyTextBlock(
     onRegisterHandle: (BodyTextHandle?) -> Unit,
     onFlush: (String) -> Unit,
     onEdited: (String) -> Unit,
-    onSplitLines: (firstLine: String, rest: List<String>) -> Unit,
     onBackspaceAtStart: () -> Unit,
 ) {
     // El estado se inicializa aquí (y no en un LaunchedEffect) para que el primer
@@ -518,7 +514,6 @@ private fun BodyTextBlock(
     val focusRequester = remember { FocusRequester() }
     val currentOnEdited by rememberUpdatedState(onEdited)
     val currentOnFlush by rememberUpdatedState(onFlush)
-    val currentOnSplit by rememberUpdatedState(onSplitLines)
     val currentOnBackspace by rememberUpdatedState(onBackspaceAtStart)
 
     DisposableEffect(state) {
@@ -531,7 +526,7 @@ private fun BodyTextBlock(
                     parts[0] to parts.getOrElse(1) { "" }
                 },
                 replace = { markdown, cursor ->
-                    state.setMarkdown(markdown)
+                    state.setMarkdown(ensureRichLinkBoundaries(markdown))
                     val bounded = cursor.coerceIn(0, state.annotatedString.length)
                     state.selection = TextRange(bounded)
                 },
@@ -573,32 +568,6 @@ private fun BodyTextBlock(
             }
     }
 
-    // Enter (o un pegado con saltos) deja un '\n' visible porque el campo es de
-    // un solo párrafo. Se parte en cuanto aparece, sin esperar al debounce.
-    LaunchedEffect(state) {
-        var skip: String? = null
-        snapshotFlow { state.annotatedString.text }
-            .collect { text ->
-                if ('\n' !in text) {
-                    skip = null
-                    return@collect
-                }
-                if (text == skip) return@collect
-                val markdown = state.toPureMarkdown()
-                val lines = if ('\n' in markdown) {
-                    markdown.split('\n')
-                } else {
-                    listOf(markdown.replace("\n", ""))
-                }
-                state.setMarkdown(lines.first())
-                if ('\n' in state.annotatedString.text) {
-                    skip = state.annotatedString.text
-                    return@collect
-                }
-                if (lines.size > 1) currentOnSplit(lines.first(), lines.drop(1))
-            }
-    }
-
     LaunchedEffect(focus) {
         val request = focus ?: return@LaunchedEffect
         val length = state.annotatedString.length
@@ -627,7 +596,7 @@ private fun BodyTextBlock(
                 true
             }
             .onFocusChanged { if (it.isFocused) onFocused(state) },
-        singleParagraph = true,
+        singleParagraph = false,
         textStyle = MaterialTheme.typography.bodyLarge.copy(color = NegroTexto),
         interactionSource = interactionSource,
         cursorBrush = SolidColor(NegroTexto),
