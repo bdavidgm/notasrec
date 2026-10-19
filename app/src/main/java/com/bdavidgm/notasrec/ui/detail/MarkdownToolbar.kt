@@ -1,6 +1,7 @@
 package com.bdavidgm.notasrec.ui.detail
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
@@ -60,6 +62,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.bdavidgm.notasrec.R
 import com.bdavidgm.notasrec.ui.theme.Celeste
+import com.bdavidgm.notasrec.ui.theme.CelesteOscuro
 import com.bdavidgm.notasrec.ui.theme.NegroTexto
 import com.bdavidgm.notasrec.ui.util.NOTE_LINK_BOUNDARY
 import com.mohamedrejeb.richeditor.model.RichSpanStyle
@@ -105,8 +108,10 @@ fun ContentModeSelector(
 @Composable
 fun RichMarkdownFormatToolbar(
     state: RichTextState?,
+    quoteSelected: Boolean,
     onInsertPhoto: () -> Unit,
     onInsertNoteLink: () -> Unit,
+    onToggleQuote: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showLinkDialog by remember { mutableStateOf(false) }
@@ -165,7 +170,8 @@ fun RichMarkdownFormatToolbar(
             FormatIconButton(
                 imageVector = Icons.Filled.FormatQuote,
                 contentDescription = stringResource(R.string.cd_format_quote),
-                onClick = { state?.let(::toggleBlockQuote) },
+                selected = quoteSelected,
+                onClick = onToggleQuote,
             )
             FormatIconButton(
                 imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
@@ -361,57 +367,21 @@ private fun applyHeading(state: RichTextState, level: Int) {
     }
 }
 
-private fun toggleBlockQuote(state: RichTextState) {
-    val text = state.annotatedString.text
-    val bounds = lineBounds(text, state.selection)
-    val block = text.substring(bounds.min, bounds.max)
-    val lines = block.split('\n')
-    val contentLines = lines.filter { it.isNotEmpty() }
-    val quoted = contentLines.isNotEmpty() && contentLines.all { isQuoteLine(it) }
-    val rewritten = lines.joinToString("\n") { line ->
-        if (quoted) stripQuote(line) else if (isQuoteLine(line) || line.isEmpty()) {
-            if (line.isEmpty()) "> " else line
-        } else {
-            "> $line"
-        }
-    }
-    state.replaceTextRange(bounds, rewritten)
-}
-
-private fun isQuoteLine(line: String): Boolean = line.startsWith(">")
-
-private fun stripQuote(line: String): String = when {
-    line.startsWith("> ") -> line.removePrefix("> ")
-    line.startsWith(">") -> line.removePrefix(">")
-    else -> line
-}
-
-private fun lineBounds(text: String, selection: TextRange): TextRange {
-    if (text.isEmpty()) return TextRange.Zero
-    val start = selection.min.coerceIn(0, text.length)
-    val end = selection.max.coerceIn(0, text.length)
-    val from = if (start == 0) {
-        0
-    } else {
-        val newline = text.lastIndexOf('\n', startIndex = start - 1)
-        if (newline == -1) 0 else newline + 1
-    }
-    val newlineAfter = text.indexOf('\n', startIndex = end)
-    val to = if (newlineAfter == -1) text.length else newlineAfter
-    return TextRange(from, to)
-}
-
 @Composable
 private fun FormatIconButton(
     imageVector: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
+    selected: Boolean = false,
 ) {
-    IconButton(onClick = onClick) {
+    IconButton(
+        onClick = onClick,
+        modifier = if (selected) Modifier.background(CelesteOscuro, CircleShape) else Modifier,
+    ) {
         Icon(
             imageVector = imageVector,
             contentDescription = contentDescription,
-            tint = NegroTexto,
+            tint = if (selected) Color.White else NegroTexto,
         )
     }
 }

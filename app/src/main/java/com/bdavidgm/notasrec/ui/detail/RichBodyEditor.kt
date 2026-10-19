@@ -11,9 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.interaction.Interaction
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,10 +20,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -75,9 +76,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.ParagraphStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
@@ -95,10 +101,8 @@ import com.mohamedrejeb.richeditor.model.RichTextState
 import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
 import com.mohamedrejeb.richeditor.ui.material3.RichText
 import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.filterNot
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -115,6 +119,8 @@ private sealed interface BodyBlock {
     val id: Long
 
     data class Text(override val id: Long, val markdown: String) : BodyBlock
+
+    data class Quote(override val id: Long, val markdown: String) : BodyBlock
 
     data class Photo(
         override val id: Long,
@@ -163,9 +169,179 @@ private fun parseBodyBlocks(markdown: String, newId: () -> Long): List<BodyBlock
     return blocks
 }
 
+private sealed interface MarkdownPiece {
+    data class Prose(val markdown: String) : MarkdownPiece
+    data class Quote(val markdown: String) : MarkdownPiece
+}
+
+/** Separa las líneas `>` para pintarlas como cita; el editor no las entiende. */
+private fun splitMarkdownPieces(markdown: String): List<MarkdownPiece> {
+    if (markdown.isEmpty()) return listOf(MarkdownPiece.Prose(""))
+    val pieces = mutableListOf<MarkdownPiece>()
+    val buffer = mutableListOf<String>()
+    var quoting = false
+    fun flush() {
+        if (buffer.isEmpty()) return
+        val text = buffer.joinToString("\n")
+        buffer.clear()
+        if (quoting) pieces += MarkdownPiece.Quote(text)
+        else if (text.isNotBlank()) pieces += MarkdownPiece.Prose(text)
+    }
+    for (line in markdown.lines()) {
+        val content = quoteLineContent(line)
+        val isQuote = content != null
+        if (isQuote != quoting) flush()
+        quoting = isQuote
+        buffer += content ?: line
+    }
+    flush()
+    return pieces.ifEmpty { listOf(MarkdownPiece.Prose(markdown)) }
+}
+
+private fun quoteLineContent(line: String): String? {
+    if (!line.startsWith(">")) return null
+    return line.removePrefix(">").removePrefix(" ")
+}
+
+private fun quoteMarkdown(body: String): String =
+    body.lines().joinToString("\n") { line -> if (line.isEmpty()) ">" else "> $line" }
+
+private const val QUOTE_MARKER = "\u200b▎"
+private const val QUOTE_PREFIX = "$QUOTE_MARKER "
+private const val NORMAL_PARAGRAPH_MARKER = "\u2060"
+private val quoteParagraphStyle = ParagraphStyle(
+    textIndent = TextIndent(firstLine = 10.sp, restLine = 10.sp),
+)
+private val quoteMarkerStyle = SpanStyle(color = CelesteOscuro)
+
+/** Sustituye el marcador Markdown por una barra visual que el editor no interpreta. */
+private fun protectBlockQuotes(markdown: String): String =
+    markdown.lines().joinToString("\n") { line ->
+        if (line.startsWith(">")) {
+            QUOTE_MARKER + line.removePrefix(">")
+        } else {
+            line
+        }
+    }
+
+private fun normalizeQuoteMarkers(markdown: String): String =
+    markdown
+        .replace(QUOTE_MARKER, ">")
+        .replace(NORMAL_PARAGRAPH_MARKER, "")
+
+/** Aplica el aspecto de cita sin separar el párrafo en otro editor. */
+private fun renderBlockQuotes(state: RichTextState) {
+    val previousSelection = state.selection
+    val quoteStarts = state.annotatedString.paragraphStyles
+        .map { it.start }
+        .filter { start -> state.annotatedString.text.startsWith(QUOTE_MARKER, start) }
+        .ifEmpty {
+            if (state.annotatedString.text.startsWith(QUOTE_MARKER)) listOf(0) else emptyList()
+        }
+    quoteStarts.forEach { start ->
+        state.selection = TextRange(start)
+        state.addParagraphStyle(quoteParagraphStyle)
+        state.addSpanStyle(
+            quoteMarkerStyle,
+            TextRange(start + 1, (start + QUOTE_MARKER.length).coerceAtMost(state.annotatedString.length)),
+        )
+    }
+    state.selection = previousSelection
+}
+
+private fun isInQuoteParagraph(state: RichTextState): Boolean {
+    return isInQuoteParagraph(state.annotatedString, state.selection.min)
+}
+
+private fun isInQuoteParagraph(text: AnnotatedString, cursor: Int): Boolean {
+    if (text.isEmpty()) return false
+    val boundedCursor = cursor.coerceIn(0, text.length)
+    val range = text.paragraphStyles.lastOrNull {
+        boundedCursor >= it.start && boundedCursor < it.end
+    } ?: text.paragraphStyles.lastOrNull { boundedCursor == it.end }
+    val start = range?.start ?: 0
+    return text.text.startsWith(QUOTE_MARKER, start)
+}
+
+private fun quoteContentStart(state: RichTextState, paragraphStart: Int): Int {
+    val afterMarker = paragraphStart + QUOTE_MARKER.length
+    return afterMarker + if (state.annotatedString.text.getOrNull(afterMarker) == ' ') 1 else 0
+}
+
+/** Enter continúa la cita en el párrafo siguiente, dentro del mismo editor. */
+private fun continueBlockQuote(state: RichTextState) {
+    state.addTextAfterSelection("\n$QUOTE_PREFIX")
+    renderBlockQuotes(state)
+}
+
+/**
+ * Backspace al comienzo del último párrafo citado quita solo su marcador. Los
+ * párrafos anteriores siguen siendo parte de la cita.
+ */
+private fun exitBlockQuoteWithBackspace(state: RichTextState): Boolean {
+    val selection = state.selection
+    if (!selection.collapsed) return false
+    val start = paragraphStart(state, selection.min)
+    if (!state.annotatedString.text.startsWith(QUOTE_MARKER, start)) return false
+    if (selection.min != quoteContentStart(state, start)) return false
+
+    val nextParagraphStart = state.annotatedString.paragraphStyles
+        .map { it.start }
+        .firstOrNull { it > start }
+    if (
+        nextParagraphStart != null &&
+        state.annotatedString.text.startsWith(QUOTE_MARKER, nextParagraphStart)
+    ) {
+        return false
+    }
+
+    state.selection = TextRange(start)
+    state.removeParagraphStyle(quoteParagraphStyle)
+    state.removeTextRange(TextRange(start, quoteContentStart(state, start)))
+    return true
+}
+
+/**
+ * Activa la cita en el párrafo actual sin partir el editor. Si ya es una cita,
+ * el texto citado se queda igual y el cursor pasa al párrafo siguiente.
+ */
+private fun toggleQuoteParagraph(state: RichTextState) {
+    val text = state.annotatedString.text
+    val cursor = state.selection.min.coerceIn(0, text.length)
+    val start = paragraphStart(state, cursor)
+    if (isInQuoteParagraph(state)) {
+        val end = paragraphEnd(state, cursor).coerceAtMost(text.length)
+        state.selection = TextRange(end)
+        // El marcador invisible distingue esta salida explícita de un Enter.
+        state.addTextAtIndex(end, "\n$NORMAL_PARAGRAPH_MARKER")
+    } else {
+        state.selection = TextRange(start)
+        state.addTextAtIndex(start, QUOTE_PREFIX)
+        renderBlockQuotes(state)
+    }
+}
+
+private fun paragraphStart(state: RichTextState, cursor: Int): Int {
+    val styles = state.annotatedString.paragraphStyles
+    if (styles.isEmpty()) return 0
+    val range = styles.lastOrNull { cursor >= it.start && cursor < it.end }
+        ?: styles.lastOrNull { cursor == it.end }
+    return range?.start ?: 0
+}
+
+private fun paragraphEnd(state: RichTextState, cursor: Int): Int {
+    val textLength = state.annotatedString.text.length
+    val styles = state.annotatedString.paragraphStyles
+    if (styles.isEmpty()) return textLength
+    val range = styles.lastOrNull { cursor >= it.start && cursor < it.end }
+        ?: styles.lastOrNull { cursor == it.end }
+    return range?.end ?: textLength
+}
+
 /** Acceso al contenido vivo de un bloque de texto (aún sin volcar al borrador). */
 private class BodyTextHandle(
     val snapshot: () -> String,
+    val paragraphIndex: () -> Int,
     val splitAtCursor: () -> Pair<String, String>,
     val replace: (markdown: String, cursor: Int) -> Unit,
 )
@@ -193,8 +369,10 @@ private class BodyBlocksState(initialMarkdown: String) {
             when (block) {
                 is BodyBlock.Text -> addText(block.markdown)
                 is BodyBlock.Photo -> blocks.add(block)
+                is BodyBlock.Quote -> addText(quoteMarkdown(block.markdown))
             }
         }
+        if (blocks.isEmpty()) addText("")
     }
 
     fun registerHandle(id: Long, handle: BodyTextHandle?) {
@@ -310,17 +488,22 @@ private class BodyBlocksState(initialMarkdown: String) {
                     val text = textOf(block, live)
                     if (text.isNotBlank()) parts += text
                 }
+                is BodyBlock.Quote -> parts += quoteMarkdown(quoteText(block, live))
                 is BodyBlock.Photo -> parts += block.toMarkdown()
             }
         }
         return parts.joinToString("\n\n")
     }
 
-    private fun textOf(block: BodyBlock.Text, live: Boolean): String {
+    private fun textOf(block: BodyBlock.Text, live: Boolean): String = markdownOf(block.id, block.markdown, live)
+
+    private fun quoteText(block: BodyBlock.Quote, live: Boolean): String = markdownOf(block.id, block.markdown, live)
+
+    private fun markdownOf(id: Long, fallback: String, live: Boolean): String {
         val raw = if (live) {
-            handles[block.id]?.snapshot?.invoke() ?: markdownById[block.id] ?: block.markdown
+            handles[id]?.snapshot?.invoke() ?: markdownById[id] ?: fallback
         } else {
-            markdownById[block.id] ?: block.markdown
+            markdownById[id] ?: fallback
         }
         return raw.replace(SPLIT_MARK, "")
     }
@@ -438,8 +621,13 @@ internal fun RichMarkdownDraftEditor(viewModel: DetailViewModel) {
 
     RichMarkdownFormatToolbar(
         state = activeState,
+        quoteSelected = activeState?.let(::isInQuoteParagraph) == true,
         onInsertPhoto = { showPhotoDialog = true },
         onInsertNoteLink = { activeState?.let { noteLinkState = it } },
+        onToggleQuote = {
+            val editor = activeState ?: return@RichMarkdownFormatToolbar
+            toggleQuoteParagraph(editor)
+        },
     )
 
     noteLinkState?.let { state ->
@@ -465,7 +653,8 @@ internal fun RichMarkdownDraftEditor(viewModel: DetailViewModel) {
             key(block.id) {
                 when (block) {
                     is BodyBlock.Text -> BodyTextBlock(
-                        block = block,
+                        blockId = block.id,
+                        initialMarkdown = block.markdown,
                         isLast = index == body.blocks.lastIndex,
                         placeholder = if (onlyTextBlock) {
                             stringResource(R.string.markdown_edit_hint)
@@ -491,6 +680,24 @@ internal fun RichMarkdownDraftEditor(viewModel: DetailViewModel) {
                         },
                     )
 
+                    is BodyBlock.Quote -> QuoteTextBlock(
+                        blockId = block.id,
+                        initialMarkdown = block.markdown,
+                        focus = pendingFocus?.takeIf { it.id == block.id },
+                        onFocusHandled = { pendingFocus = null },
+                        onFocused = { state ->
+                            focusedTextId = block.id
+                            activeState = state
+                            userEdited = true
+                        },
+                        onRegisterHandle = { handle -> body.registerHandle(block.id, handle) },
+                        onFlush = { markdown -> body.updateText(block.id, markdown) },
+                        onEdited = { markdown ->
+                            body.updateText(block.id, markdown)
+                            push()
+                        },
+                    )
+
                     is BodyBlock.Photo -> BodyPhotoBlock(
                         photo = block,
                         onRemove = {
@@ -508,7 +715,8 @@ internal fun RichMarkdownDraftEditor(viewModel: DetailViewModel) {
 @OptIn(FlowPreview::class)
 @Composable
 private fun BodyTextBlock(
-    block: BodyBlock.Text,
+    blockId: Long,
+    initialMarkdown: String,
     isLast: Boolean,
     placeholder: String?,
     focus: LineFocus?,
@@ -527,14 +735,15 @@ private fun BodyTextBlock(
             // rc10 atribuye la escritura en el borde derecho de un enlace al
             // párrafo siguiente (#709). Un límite invisible de estilo normal
             // elimina la ambigüedad también en enlaces guardados anteriormente.
-            setMarkdown(ensureRichLinkBoundaries(block.markdown))
+            setMarkdown(ensureRichLinkBoundaries(protectBlockQuotes(initialMarkdown)))
+            renderBlockQuotes(this)
             selection = TextRange.Zero
         }
     }
     // El round-trip del Markdown normaliza (listas, énfasis…), así que la
     // referencia es lo que el editor devuelve, no lo que se le dio.
-    var lastKnown by remember { mutableStateOf(state.toPureMarkdown()) }
-    val interactionSource = remember { IgnorePressInteractionSource() }
+    var lastKnown by remember { mutableStateOf(normalizeQuoteMarkers(state.toPureMarkdown())) }
+    val interactionSource = remember { MutableInteractionSource() }
     val focusRequester = remember { FocusRequester() }
     val currentOnEdited by rememberUpdatedState(onEdited)
     val currentOnFlush by rememberUpdatedState(onFlush)
@@ -543,21 +752,28 @@ private fun BodyTextBlock(
     DisposableEffect(state) {
         onRegisterHandle(
             BodyTextHandle(
-                snapshot = { state.toPureMarkdown() },
+                snapshot = { normalizeQuoteMarkers(state.toPureMarkdown()) },
+                paragraphIndex = {
+                    val cursor = state.selection.min
+                    val styles = state.annotatedString.paragraphStyles
+                    if (styles.isEmpty()) 0
+                    else styles.indexOfLast { cursor >= it.start && cursor <= it.end }.coerceAtLeast(0)
+                },
                 splitAtCursor = {
                     state.addTextAfterSelection(SPLIT_MARK)
-                    val parts = state.toPureMarkdown().split(SPLIT_MARK, limit = 2)
+                    val parts = normalizeQuoteMarkers(state.toPureMarkdown()).split(SPLIT_MARK, limit = 2)
                     parts[0] to parts.getOrElse(1) { "" }
                 },
                 replace = { markdown, cursor ->
-                    state.setMarkdown(ensureRichLinkBoundaries(markdown))
+                    state.setMarkdown(ensureRichLinkBoundaries(protectBlockQuotes(markdown)))
+                    renderBlockQuotes(state)
                     val bounded = cursor.coerceIn(0, state.annotatedString.length)
                     state.selection = TextRange(bounded)
                 },
             ),
         )
         onDispose {
-            currentOnFlush(state.toPureMarkdown())
+            currentOnFlush(normalizeQuoteMarkers(state.toPureMarkdown()))
             onRegisterHandle(null)
         }
     }
@@ -569,7 +785,7 @@ private fun BodyTextBlock(
             .drop(1)
             .debounce(400)
             .collect {
-                val markdown = state.toPureMarkdown()
+                val markdown = normalizeQuoteMarkers(state.toPureMarkdown())
                 if (markdown == lastKnown) return@collect
                 lastKnown = markdown
                 currentOnEdited(markdown)
@@ -592,6 +808,32 @@ private fun BodyTextBlock(
             }
     }
 
+    // Algunos teclados virtuales insertan el salto directamente y no generan
+    // Key.Enter. Si el cursor venía de una cita y aparece un párrafo normal por
+    // la inserción de un único salto, añadimos su marcador en el mismo editor.
+    LaunchedEffect(state) {
+        var previousText = state.annotatedString
+        var previousSelection = state.selection
+        snapshotFlow { state.annotatedString to state.selection }
+            .collect { (text, selection) ->
+                val enteredNewParagraph =
+                    selection.collapsed &&
+                        previousSelection.collapsed &&
+                        text.length == previousText.length + 1 &&
+                        selection.min == previousSelection.min + 1 &&
+                        isInQuoteParagraph(previousText, previousSelection.min) &&
+                        !isInQuoteParagraph(text, selection.min) &&
+                        text.text.getOrNull(selection.min - 1) == ' '
+
+                previousText = text
+                previousSelection = selection
+                if (enteredNewParagraph) {
+                    state.addTextAfterSelection(QUOTE_PREFIX)
+                    renderBlockQuotes(state)
+                }
+            }
+    }
+
     LaunchedEffect(focus) {
         val request = focus ?: return@LaunchedEffect
         val length = state.annotatedString.length
@@ -611,9 +853,19 @@ private fun BodyTextBlock(
             .heightIn(min = if (isLast) 120.dp else 24.dp)
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown || event.key != Key.Backspace) {
+                if (event.type != KeyEventType.KeyDown) {
                     return@onPreviewKeyEvent false
                 }
+                if (
+                    event.key == Key.Enter &&
+                    state.selection.collapsed &&
+                    isInQuoteParagraph(state)
+                ) {
+                    continueBlockQuote(state)
+                    return@onPreviewKeyEvent true
+                }
+                if (event.key != Key.Backspace) return@onPreviewKeyEvent false
+                if (exitBlockQuoteWithBackspace(state)) return@onPreviewKeyEvent true
                 val selection = state.selection
                 if (!selection.collapsed || selection.start != 0) return@onPreviewKeyEvent false
                 currentOnBackspace()
@@ -638,6 +890,49 @@ private fun BodyTextBlock(
         },
         contentPadding = PaddingValues(0.dp),
     )
+}
+
+@Composable
+private fun QuoteTextBlock(
+    blockId: Long,
+    initialMarkdown: String,
+    focus: LineFocus?,
+    onFocusHandled: () -> Unit,
+    onFocused: (RichTextState) -> Unit,
+    onRegisterHandle: (BodyTextHandle?) -> Unit,
+    onFlush: (String) -> Unit,
+    onEdited: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .height(IntrinsicSize.Min),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(top = 2.dp, end = 10.dp, bottom = 2.dp)
+                .width(4.dp)
+                .fillMaxHeight()
+                .background(CelesteOscuro, RoundedCornerShape(2.dp)),
+        )
+        Box(modifier = Modifier.weight(1f)) {
+            BodyTextBlock(
+                blockId = blockId,
+                initialMarkdown = initialMarkdown,
+                isLast = false,
+                placeholder = null,
+                focus = focus,
+                onFocusHandled = onFocusHandled,
+                onFocused = onFocused,
+                onRegisterHandle = onRegisterHandle,
+                onFlush = onFlush,
+                onEdited = onEdited,
+                onBackspaceAtStart = {},
+            )
+        }
+    }
 }
 
 /**
@@ -686,6 +981,8 @@ internal fun ReadOnlyRichMarkdownBody(
                         is BodyBlock.Text ->
                             if (block.markdown.isNotBlank()) ReadOnlyTextBlock(block.markdown)
 
+                        is BodyBlock.Quote -> ReadOnlyTextBlock(quoteMarkdown(block.markdown))
+
                         is BodyBlock.Photo -> BodyPhotoBlock(photo = block, onRemove = null)
                     }
                 }
@@ -696,6 +993,44 @@ internal fun ReadOnlyRichMarkdownBody(
 
 @Composable
 private fun ReadOnlyTextBlock(markdown: String) {
+    val pieces = remember(markdown) { splitMarkdownPieces(markdown) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        pieces.forEach { piece ->
+            when (piece) {
+                is MarkdownPiece.Prose ->
+                    if (piece.markdown.isNotBlank()) RichMarkdownText(piece.markdown)
+                is MarkdownPiece.Quote -> Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 2.dp, end = 10.dp, bottom = 2.dp)
+                            .width(4.dp)
+                            .fillMaxHeight()
+                            .background(CelesteOscuro, RoundedCornerShape(2.dp)),
+                    )
+                    Box(modifier = Modifier.weight(1f)) {
+                        if (piece.markdown.isBlank()) {
+                            Text(
+                                text = ">",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = CelesteOscuro,
+                            )
+                        } else {
+                            RichMarkdownText(piece.markdown)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RichMarkdownText(markdown: String) {
     val state = remember(markdown) { RichTextState().apply { setMarkdown(markdown) } }
     RichText(
         state = state,
@@ -952,17 +1287,3 @@ private fun InsertPhotoDialog(
     )
 }
 
-/**
- * compose-rich-editor (rc10) recoloca la selección en cada `PressInteraction.Press`
- * con una heurística de líneas propia: si el texto tiene líneas plegadas, descarta
- * el offset que calculó `BasicTextField` y el toque acaba en otro sitio o se ignora
- * (issue #304 de la librería). Como su `VisualTransformation` usa
- * `OffsetMapping.Identity`, el mapeo nativo ya es correcto, así que basta con no
- * entregarle el evento de pulsación. El foco y los colores siguen llegando.
- */
-private class IgnorePressInteractionSource(
-    private val delegate: MutableInteractionSource = MutableInteractionSource(),
-) : MutableInteractionSource by delegate {
-    override val interactions: Flow<Interaction> =
-        delegate.interactions.filterNot { it is PressInteraction.Press }
-}
