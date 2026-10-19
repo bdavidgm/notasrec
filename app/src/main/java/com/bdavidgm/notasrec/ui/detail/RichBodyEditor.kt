@@ -1,8 +1,16 @@
 package com.bdavidgm.notasrec.ui.detail
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.Interaction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
@@ -10,18 +18,24 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,6 +44,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,27 +60,36 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.bdavidgm.notasrec.R
+import com.bdavidgm.notasrec.ui.theme.Celeste
+import com.bdavidgm.notasrec.ui.theme.CelesteOscuro
 import com.bdavidgm.notasrec.ui.theme.NegroTexto
 import com.bdavidgm.notasrec.ui.util.NOTE_LINK_BOUNDARY
-import com.bdavidgm.notasrec.ui.util.ensureRichLinkBoundaries
 import com.bdavidgm.notasrec.ui.util.ensurePureMarkdown
+import com.bdavidgm.notasrec.ui.util.ensureRichLinkBoundaries
 import com.bdavidgm.notasrec.ui.util.parseNoteLinkUid
 import com.mohamedrejeb.richeditor.model.RichTextState
 import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
@@ -680,35 +704,215 @@ private fun ReadOnlyTextBlock(markdown: String) {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BodyPhotoBlock(
     photo: BodyBlock.Photo,
     onRemove: (() -> Unit)?,
 ) {
     val context = LocalContext.current
-    Box(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(photo.imageModel())
-                .crossfade(true)
-                .build(),
-            contentDescription = photo.alt.ifBlank { null },
+    var selected by remember { mutableStateOf(false) }
+    var showFullscreen by remember { mutableStateOf(false) }
+    val imageModel = remember(photo.url) { photo.imageModel() }
+
+    if (selected) {
+        BackHandler { selected = false }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 360.dp)
-                .clip(RoundedCornerShape(8.dp)),
-            contentScale = ContentScale.Fit,
-        )
-        if (onRemove != null) {
-            IconButton(
-                onClick = onRemove,
-                modifier = Modifier.align(Alignment.TopEnd),
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Close,
-                    contentDescription = stringResource(R.string.cd_remove_photo),
-                    tint = NegroTexto,
+                .clip(RoundedCornerShape(8.dp))
+                .then(
+                    if (selected) {
+                        Modifier.border(BorderStroke(2.dp, CelesteOscuro), RoundedCornerShape(8.dp))
+                    } else {
+                        Modifier
+                    },
                 )
+                .combinedClickable(
+                    onClick = { if (selected) selected = false },
+                    onLongClick = { selected = true },
+                ),
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(imageModel)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = photo.alt.ifBlank { null },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp),
+                contentScale = ContentScale.Fit,
+            )
+        }
+
+        if (selected) {
+            Spacer(Modifier.height(8.dp))
+            PhotoActionMenu(
+                canDelete = onRemove != null,
+                onFullscreen = {
+                    selected = false
+                    showFullscreen = true
+                },
+                onDelete = {
+                    selected = false
+                    onRemove?.invoke()
+                },
+            )
+        }
+    }
+
+    if (showFullscreen) {
+        FullscreenPhotoDialog(
+            imageModel = imageModel,
+            contentDescription = photo.alt.ifBlank { null },
+            onDismiss = { showFullscreen = false },
+        )
+    }
+}
+
+@Composable
+private fun PhotoActionMenu(
+    canDelete: Boolean,
+    onFullscreen: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Surface(
+        color = Celeste,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.85f)),
+        shadowElevation = 2.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PhotoMenuAction(
+                icon = Icons.Filled.Fullscreen,
+                label = stringResource(R.string.action_photo_fullscreen),
+                contentDescription = stringResource(R.string.cd_photo_fullscreen),
+                onClick = onFullscreen,
+            )
+            if (canDelete) {
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 4.dp)
+                        .size(width = 1.dp, height = 28.dp)
+                        .background(Color.White.copy(alpha = 0.7f)),
+                )
+                PhotoMenuAction(
+                    icon = Icons.Filled.Delete,
+                    label = stringResource(R.string.action_photo_delete),
+                    contentDescription = stringResource(R.string.cd_remove_photo),
+                    onClick = onDelete,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoMenuAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = NegroTexto,
+            modifier = Modifier.size(24.dp),
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = NegroTexto,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun FullscreenPhotoDialog(
+    imageModel: Any,
+    contentDescription: String?,
+    onDismiss: () -> Unit,
+) {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(imageModel)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = contentDescription,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            val newScale = (scale * zoom).coerceIn(1f, 6f)
+                            scale = newScale
+                            offset = if (newScale <= 1.01f) {
+                                Offset.Zero
+                            } else {
+                                offset + pan
+                            }
+                        }
+                    }
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    },
+                contentScale = ContentScale.Fit,
+            )
+            Surface(
+                color = Celeste,
+                shape = RoundedCornerShape(50),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.85f)),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
+            ) {
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.cd_close_photo_fullscreen),
+                        tint = NegroTexto,
+                    )
+                }
             }
         }
     }

@@ -119,6 +119,10 @@
     <string name="snackbar_photo_error">No se pudo insertar la foto</string>
     <string name="snackbar_no_camera">No hay ninguna aplicación de cámara</string>
     <string name="cd_remove_photo">Quitar foto</string>
+    <string name="cd_photo_fullscreen">Ver a pantalla completa</string>
+    <string name="cd_close_photo_fullscreen">Cerrar foto</string>
+    <string name="action_photo_fullscreen">Ampliar</string>
+    <string name="action_photo_delete">Eliminar</string>
     <string name="cd_overflow_menu">Más opciones</string>
     <string name="action_export">Exportar</string>
     <string name="action_export_note">Exportar nota…</string>
