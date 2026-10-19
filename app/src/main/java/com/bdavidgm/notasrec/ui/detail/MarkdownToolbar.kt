@@ -1,12 +1,15 @@
 package com.bdavidgm.notasrec.ui.detail
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.AddAPhoto
@@ -14,13 +17,16 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.FormatListNumbered
-import androidx.compose.material.icons.filled.FormatSize
+import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.FormatStrikethrough
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.NoteAlt
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SegmentedButton
@@ -30,19 +36,27 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.TextUnitType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.bdavidgm.notasrec.R
 import com.bdavidgm.notasrec.ui.theme.Celeste
@@ -96,7 +110,17 @@ fun RichMarkdownFormatToolbar(
     modifier: Modifier = Modifier,
 ) {
     var showLinkDialog by remember { mutableStateOf(false) }
+    var headingLevel by remember { mutableIntStateOf(0) }
     val placeholderLink = stringResource(R.string.markdown_placeholder_link)
+    val editor = state
+    val cursor = editor?.selection
+    LaunchedEffect(editor, cursor) {
+        val richState = editor ?: return@LaunchedEffect
+        val selection = cursor ?: return@LaunchedEffect
+        if (!selection.collapsed) return@LaunchedEffect
+        if (isAtLineStart(richState, selection.min)) return@LaunchedEffect
+        headingLevel = headingLevelOf(richState.getSpanStyle(TextRange(selection.min)))
+    }
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -131,14 +155,17 @@ fun RichMarkdownFormatToolbar(
                     state?.toggleSpanStyle(SpanStyle(textDecoration = TextDecoration.LineThrough))
                 },
             )
-            FormatIconButton(
-                imageVector = Icons.Filled.FormatSize,
-                contentDescription = stringResource(R.string.cd_format_heading),
-                onClick = {
-                    state?.toggleSpanStyle(
-                        SpanStyle(fontSize = 22.sp, fontWeight = FontWeight.Bold),
-                    )
+            HeadingLevelButton(
+                level = headingLevel,
+                onLevelSelected = { level ->
+                    headingLevel = level
+                    state?.let { applyHeading(it, level) }
                 },
+            )
+            FormatIconButton(
+                imageVector = Icons.Filled.FormatQuote,
+                contentDescription = stringResource(R.string.cd_format_quote),
+                onClick = { state?.let(::toggleBlockQuote) },
             )
             FormatIconButton(
                 imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
@@ -214,6 +241,164 @@ private fun insertLinkWithBoundary(
         textRange = TextRange(boundaryEnd - 1, boundaryEnd),
     )
     state.selection = TextRange(boundaryEnd)
+}
+
+/**
+ * Tamaños que compose-rich-editor traduce a `#`…`######` al guardar Markdown:
+ * negrita y tamaño en `em`, de mayor a menor.
+ */
+private val headingStyles: List<SpanStyle> = listOf(
+    SpanStyle(fontSize = 2.em, fontWeight = FontWeight.Bold),
+    SpanStyle(fontSize = 1.5.em, fontWeight = FontWeight.Bold),
+    SpanStyle(fontSize = 1.17.em, fontWeight = FontWeight.Bold),
+    SpanStyle(fontSize = 1.12.em, fontWeight = FontWeight.Bold),
+    SpanStyle(fontSize = 0.83.em, fontWeight = FontWeight.Bold),
+    SpanStyle(fontSize = 0.75.em, fontWeight = FontWeight.Bold),
+)
+
+/** Tamaños visibles en el menú, distintos entre sí para comparar de un vistazo. */
+private val headingMenuSizes: List<TextUnit> = listOf(
+    26.sp, 22.sp, 19.sp, 17.sp, 15.sp, 13.sp,
+)
+
+@Composable
+private fun HeadingLevelButton(
+    level: Int,
+    onLevelSelected: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = if (level in 1..6) "H$level" else "H#"
+    val description = stringResource(R.string.cd_format_heading)
+    Box {
+        IconButton(
+            onClick = { expanded = true },
+            modifier = Modifier.semantics { contentDescription = description },
+        ) {
+            Text(
+                text = label,
+                color = NegroTexto,
+                fontWeight = FontWeight.Bold,
+                fontSize = if (level in 1..6) 15.sp else 16.sp,
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = Celeste,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, Color.White),
+        ) {
+            headingMenuSizes.forEachIndexed { index, size ->
+                val itemLevel = index + 1
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = "H$itemLevel",
+                            color = NegroTexto,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = size,
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        onLevelSelected(itemLevel)
+                    },
+                    colors = MenuDefaults.itemColors(textColor = NegroTexto),
+                )
+            }
+        }
+    }
+}
+
+private fun isAtLineStart(state: RichTextState, cursor: Int): Boolean {
+    if (cursor <= 0) return true
+    val text = state.annotatedString.text
+    if (text.getOrNull(cursor - 1) == '\n') return true
+    val styles = state.annotatedString.paragraphStyles
+    if (styles.isEmpty()) return false
+    val paragraph = styles.lastOrNull { cursor >= it.start && cursor < it.end }
+        ?: styles.lastOrNull { cursor == it.end }
+    return paragraph != null && cursor == paragraph.start
+}
+
+/** 0 si el carácter no es un título H1–H6. */
+private fun headingLevelOf(style: SpanStyle): Int {
+    if ((style.fontWeight?.weight ?: 400) <= 400) return 0
+    val size = style.fontSize
+    return when (size.type) {
+        TextUnitType.Em -> when {
+            size >= 2.em -> 1
+            size >= 1.5.em -> 2
+            size >= 1.17.em -> 3
+            size >= 1.12.em -> 4
+            size >= 0.83.em -> 5
+            size >= 0.75.em -> 6
+            else -> 0
+        }
+        TextUnitType.Sp -> when {
+            size.value >= 32f -> 1
+            size.value >= 24f -> 2
+            size.value >= 18.72f -> 3
+            size.value >= 17.92f -> 4
+            size.value >= 13.28f -> 5
+            size.value >= 12f -> 6
+            else -> 0
+        }
+        else -> 0
+    }
+}
+
+private fun applyHeading(state: RichTextState, level: Int) {
+    val style = headingStyles.getOrNull(level - 1) ?: return
+    val selection = state.selection
+    if (selection.collapsed) {
+        // Solo el estilo de lo que se va a escribir; el texto ya existente no cambia.
+        headingStyles.forEach { state.removeSpanStyle(it) }
+        state.addSpanStyle(style)
+    } else {
+        headingStyles.forEach { state.removeSpanStyle(it, selection) }
+        state.addSpanStyle(style, selection)
+    }
+}
+
+private fun toggleBlockQuote(state: RichTextState) {
+    val text = state.annotatedString.text
+    val bounds = lineBounds(text, state.selection)
+    val block = text.substring(bounds.min, bounds.max)
+    val lines = block.split('\n')
+    val contentLines = lines.filter { it.isNotEmpty() }
+    val quoted = contentLines.isNotEmpty() && contentLines.all { isQuoteLine(it) }
+    val rewritten = lines.joinToString("\n") { line ->
+        if (quoted) stripQuote(line) else if (isQuoteLine(line) || line.isEmpty()) {
+            if (line.isEmpty()) "> " else line
+        } else {
+            "> $line"
+        }
+    }
+    state.replaceTextRange(bounds, rewritten)
+}
+
+private fun isQuoteLine(line: String): Boolean = line.startsWith(">")
+
+private fun stripQuote(line: String): String = when {
+    line.startsWith("> ") -> line.removePrefix("> ")
+    line.startsWith(">") -> line.removePrefix(">")
+    else -> line
+}
+
+private fun lineBounds(text: String, selection: TextRange): TextRange {
+    if (text.isEmpty()) return TextRange.Zero
+    val start = selection.min.coerceIn(0, text.length)
+    val end = selection.max.coerceIn(0, text.length)
+    val from = if (start == 0) {
+        0
+    } else {
+        val newline = text.lastIndexOf('\n', startIndex = start - 1)
+        if (newline == -1) 0 else newline + 1
+    }
+    val newlineAfter = text.indexOf('\n', startIndex = end)
+    val to = if (newlineAfter == -1) text.length else newlineAfter
+    return TextRange(from, to)
 }
 
 @Composable
