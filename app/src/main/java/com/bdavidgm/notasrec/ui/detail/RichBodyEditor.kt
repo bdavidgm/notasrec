@@ -6,6 +6,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -72,7 +74,11 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.res.stringResource
@@ -83,6 +89,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -92,13 +99,13 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.bdavidgm.notasrec.R
 import com.bdavidgm.notasrec.ui.theme.Celeste
-import com.bdavidgm.notasrec.ui.theme.CelesteClaro
 import com.bdavidgm.notasrec.ui.theme.CelesteOscuro
 import com.bdavidgm.notasrec.ui.theme.NegroTexto
 import com.bdavidgm.notasrec.ui.util.NOTE_LINK_BOUNDARY
 import com.bdavidgm.notasrec.ui.util.ensurePureMarkdown
 import com.bdavidgm.notasrec.ui.util.ensureRichLinkBoundaries
 import com.bdavidgm.notasrec.ui.util.parseNoteLinkUid
+import com.mohamedrejeb.richeditor.model.RichSpanStyle
 import com.mohamedrejeb.richeditor.model.RichTextState
 import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
 import com.mohamedrejeb.richeditor.ui.material3.RichText
@@ -242,10 +249,7 @@ private val codeSpanStyle = SpanStyle(
     fontFamily = FontFamily.Monospace,
     background = Color(0xFFF3F4F6),
 )
-private val inlineCodeSpanStyle = SpanStyle(
-    fontFamily = FontFamily.Monospace,
-    background = CelesteClaro,
-)
+private val inlineCodeStyle = RichSpanStyle.Code()
 private val inlineCodeLine = Regex("^`([^`]*)`$")
 
 private fun isCodeFenceLine(line: String): Boolean {
@@ -324,14 +328,17 @@ private fun normalizeCodeMarkers(markdown: String): String {
 }
 
 private fun normalizeInlineCodeMarkers(markdown: String): String =
-    markdown.lines().joinToString("\n") { line ->
-        if (!line.startsWith(INLINE_CODE_MARKER)) {
-            line
-        } else {
-            val content = line.removePrefix(INLINE_CODE_MARKER)
-            if (content.isEmpty()) "`\u200b`" else "`$content`"
+    markdown
+        .lines()
+        .joinToString("\n") { line ->
+            if (!line.startsWith(INLINE_CODE_MARKER)) {
+                line
+            } else {
+                val content = line.removePrefix(INLINE_CODE_MARKER)
+                if (content.isEmpty()) "`\u200b`" else "`$content`"
+            }
         }
-    }
+        .replace(INLINE_CODE_MARKER, "")
 
 private fun exportEditorMarkdown(markdown: String): String =
     normalizeInlineCodeMarkers(normalizeCodeMarkers(normalizeQuoteMarkers(markdown)))
@@ -400,22 +407,28 @@ private fun inlineCodeContentStart(paragraphStart: Int): Int =
 
 private fun renderInlineCode(state: RichTextState) {
     val previousSelection = state.selection
+    val text = state.annotatedString.text
     val ranges = state.annotatedString.paragraphStyles
-        .filter { state.annotatedString.text.startsWith(INLINE_CODE_MARKER, it.start) }
+        .filter { text.startsWith(INLINE_CODE_MARKER, it.start) }
         .ifEmpty {
-            if (state.annotatedString.text.startsWith(INLINE_CODE_MARKER)) {
+            if (text.startsWith(INLINE_CODE_MARKER)) {
                 listOf(AnnotatedString.Range(ParagraphStyle(), 0, state.annotatedString.length))
             } else {
                 emptyList()
             }
         }
     ranges.forEach { range ->
-        if (range.end > range.start) {
-            state.addSpanStyle(inlineCodeSpanStyle, TextRange(range.start, range.end))
+        val contentStart = range.start + INLINE_CODE_MARKER.length
+        if (range.end > contentStart) {
+            state.addRichSpan(inlineCodeStyle, TextRange(contentStart, range.end))
         }
     }
     state.selection = previousSelection
-    if (isInInlineCodeParagraph(state)) state.addSpanStyle(inlineCodeSpanStyle)
+    if (isInInlineCodeParagraph(state)) {
+        state.addRichSpan(inlineCodeStyle)
+    } else if (previousSelection.collapsed) {
+        state.removeRichSpan(inlineCodeStyle)
+    }
 }
 
 private fun continueInlineCode(state: RichTextState) {
@@ -443,7 +456,7 @@ private fun exitInlineCodeWithBackspace(state: RichTextState): Boolean {
 
     val end = paragraphEnd(state, selection.min).coerceAtMost(state.annotatedString.length)
     state.selection = TextRange(start)
-    state.removeSpanStyle(inlineCodeSpanStyle, TextRange(start, end))
+    state.removeRichSpan(inlineCodeStyle, TextRange(inlineCodeContentStart(start), end))
     state.removeTextRange(TextRange(start, inlineCodeContentStart(start)))
     return true
 }
@@ -782,7 +795,11 @@ private class BodyBlocksState(initialMarkdown: String) {
 }
 
 @Composable
-internal fun RichMarkdownDraftEditor(viewModel: DetailViewModel) {
+internal fun RichMarkdownDraftEditor(
+    viewModel: DetailViewModel,
+    scrollState: ScrollState,
+    scrollContent: () -> LayoutCoordinates?,
+) {
     val body = remember(viewModel) { BodyBlocksState(viewModel.draftContent.value) }
     var lastPushed by remember(viewModel) { mutableStateOf(viewModel.draftContent.value) }
     // userEdited se activa también al recibir el foco un bloque: desde ese momento
@@ -889,6 +906,14 @@ internal fun RichMarkdownDraftEditor(viewModel: DetailViewModel) {
         }
     }
 
+    var toolbarY by remember { mutableFloatStateOf(Float.NaN) }
+    val stickGap = with(LocalDensity.current) { 4.dp.toPx() }
+    val pinOffset = if (toolbarY.isNaN()) {
+        0
+    } else {
+        (scrollState.value - toolbarY + stickGap).coerceAtLeast(0f).toInt()
+    }
+
     RichMarkdownFormatToolbar(
         state = activeState,
         quoteSelected = activeState?.let(::isInQuoteParagraph) == true,
@@ -908,6 +933,15 @@ internal fun RichMarkdownDraftEditor(viewModel: DetailViewModel) {
             val editor = activeState ?: return@RichMarkdownFormatToolbar
             toggleInlineCodeParagraph(editor)
         },
+        modifier = Modifier
+            .zIndex(1f)
+            .onPlaced { coords ->
+                val content = scrollContent() ?: return@onPlaced
+                if (!coords.isAttached || !content.isAttached || pinOffset != 0) return@onPlaced
+                toolbarY = content.localPositionOf(coords, Offset.Zero).y
+            }
+            .offset { IntOffset(0, pinOffset) }
+            .background(MaterialTheme.colorScheme.background),
     )
 
     noteLinkState?.let { state ->

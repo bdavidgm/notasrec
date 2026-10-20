@@ -652,7 +652,7 @@ private fun DetailNoteBody(
             .windowInsetsPadding(
                 WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom),
             )
-            .padding(16.dp)
+            .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
             // Fuera del scroll: es exactamente el hueco visible del editor.
             .onPlaced { viewportCoords = it },
     ) {
@@ -660,6 +660,7 @@ private fun DetailNoteBody(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
+                .padding(top = 16.dp)
                 // Dentro del scroll y pegados: comparten coordenadas con el
                 // contenido, el mismo espacio en que llega el rect del cursor.
                 .onPlaced { contentCoords = it }
@@ -719,7 +720,11 @@ private fun DetailNoteBody(
                     if (isEditing) {
                         DraftTitleField(viewModel)
                         Spacer(Modifier.height(8.dp))
-                        DraftContentEditor(viewModel = viewModel)
+                        DraftContentEditor(
+                            viewModel = viewModel,
+                            scrollState = scrollState,
+                            scrollContent = { contentCoords },
+                        )
                     } else {
                         ReadOnlyNoteBody(viewModel)
                     }
@@ -840,14 +845,22 @@ private fun DraftTitleField(viewModel: DetailViewModel) {
 }
 
 @Composable
-private fun DraftContentEditor(viewModel: DetailViewModel) {
+private fun DraftContentEditor(
+    viewModel: DetailViewModel,
+    scrollState: ScrollState,
+    scrollContent: () -> LayoutCoordinates?,
+) {
     // Ojo: aquí NO se colecta draftContent. Si se leyera en composición, cada
     // pulsación recompondría el editor completo (y su toolbar).
     val contentMode by viewModel.contentDisplayMode.collectAsStateWithLifecycle()
 
     when (contentMode) {
         ContentDisplayMode.TXT -> PlainTextDraftEditor(viewModel)
-        ContentDisplayMode.MD -> RichMarkdownDraftEditor(viewModel)
+        ContentDisplayMode.MD -> RichMarkdownDraftEditor(
+            viewModel = viewModel,
+            scrollState = scrollState,
+            scrollContent = scrollContent,
+        )
     }
 }
 
