@@ -108,6 +108,7 @@ import com.bdavidgm.notasrec.ui.util.buildNoteCopyText
 import com.bdavidgm.notasrec.ui.util.formatNoteInstant
 import com.bdavidgm.notasrec.ui.util.noteTimestampLabel
 import com.bdavidgm.notasrec.ui.util.suggestedNoteExportFileName
+import com.bdavidgm.notasrec.ui.util.suggestedNoteExportPdfFileName
 import com.bdavidgm.notasrec.ui.util.suggestedNoteExportZipFileName
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -238,6 +239,12 @@ fun DetailScreen(
         }
     }
 
+    val exportPdfLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/pdf"),
+    ) { uri ->
+        if (uri != null) viewModel.exportNotePdf(uri)
+    }
+
     val exportFolderLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { treeUri ->
@@ -285,49 +292,93 @@ fun DetailScreen(
             title = { Text(stringResource(R.string.dialog_export_note_title)) },
             text = {
                 Column {
-                    TextButton(
-                        onClick = {
-                            showExportDialog = false
-                            scope.launch {
-                                if (viewModel.exportIncludesPhotos()) {
-                                    packagingFormat = NoteExportFormat.TXT.name
-                                } else {
-                                    pendingExportFormat = NoteExportFormat.TXT.name
+                    if (NoteKind.fromStored(nwt?.note?.kind) == NoteKind.AUDIO) {
+                        TextButton(
+                            onClick = {
+                                showExportDialog = false
+                                pendingExportFormat = NoteExportFormat.TXT.name
+                                scope.launch {
+                                    yield()
                                     launchCreateDocument(
-                                        exportTxtLauncher,
-                                        suggestedNoteExportFileName(
-                                            viewModel.draftTitle.value,
-                                            NoteExportFormat.TXT,
-                                        ),
+                                        exportZipLauncher,
+                                        suggestedNoteExportZipFileName(viewModel.draftTitle.value),
                                     )
                                 }
-                            }
-                        },
-                        colors = dialogActionColors,
-                    ) {
-                        Text(stringResource(R.string.action_export_txt))
-                    }
-                    TextButton(
-                        onClick = {
-                            showExportDialog = false
-                            scope.launch {
-                                if (viewModel.exportIncludesPhotos()) {
-                                    packagingFormat = NoteExportFormat.MD.name
-                                } else {
-                                    pendingExportFormat = NoteExportFormat.MD.name
-                                    launchCreateDocument(
-                                        exportMdLauncher,
-                                        suggestedNoteExportFileName(
-                                            viewModel.draftTitle.value,
-                                            NoteExportFormat.MD,
-                                        ),
-                                    )
+                            },
+                            colors = dialogActionColors,
+                        ) {
+                            Text(stringResource(R.string.action_export_audio_zip))
+                        }
+                        TextButton(
+                            onClick = {
+                                showExportDialog = false
+                                pendingExportFormat = NoteExportFormat.TXT.name
+                                scope.launch {
+                                    yield()
+                                    launchOpenTree(exportFolderLauncher)
                                 }
-                            }
-                        },
-                        colors = dialogActionColors,
-                    ) {
-                        Text(stringResource(R.string.action_export_md))
+                            },
+                            colors = dialogActionColors,
+                        ) {
+                            Text(stringResource(R.string.action_export_audio_folder))
+                        }
+                    } else {
+                        TextButton(
+                            onClick = {
+                                showExportDialog = false
+                                scope.launch {
+                                    if (viewModel.exportIncludesPhotos()) {
+                                        packagingFormat = NoteExportFormat.TXT.name
+                                    } else {
+                                        pendingExportFormat = NoteExportFormat.TXT.name
+                                        launchCreateDocument(
+                                            exportTxtLauncher,
+                                            suggestedNoteExportFileName(
+                                                viewModel.draftTitle.value,
+                                                NoteExportFormat.TXT,
+                                            ),
+                                        )
+                                    }
+                                }
+                            },
+                            colors = dialogActionColors,
+                        ) {
+                            Text(stringResource(R.string.action_export_txt))
+                        }
+                        TextButton(
+                            onClick = {
+                                showExportDialog = false
+                                scope.launch {
+                                    if (viewModel.exportIncludesPhotos()) {
+                                        packagingFormat = NoteExportFormat.MD.name
+                                    } else {
+                                        pendingExportFormat = NoteExportFormat.MD.name
+                                        launchCreateDocument(
+                                            exportMdLauncher,
+                                            suggestedNoteExportFileName(
+                                                viewModel.draftTitle.value,
+                                                NoteExportFormat.MD,
+                                            ),
+                                        )
+                                    }
+                                }
+                            },
+                            colors = dialogActionColors,
+                        ) {
+                            Text(stringResource(R.string.action_export_md))
+                        }
+                        TextButton(
+                            onClick = {
+                                showExportDialog = false
+                                launchCreateDocument(
+                                    exportPdfLauncher,
+                                    suggestedNoteExportPdfFileName(viewModel.draftTitle.value),
+                                )
+                            },
+                            colors = dialogActionColors,
+                        ) {
+                            Text(stringResource(R.string.action_export_pdf))
+                        }
                     }
                 }
             },

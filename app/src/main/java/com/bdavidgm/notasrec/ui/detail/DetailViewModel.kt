@@ -12,6 +12,7 @@ import com.bdavidgm.notasrec.ui.util.NoteExportFormat
 import com.bdavidgm.notasrec.ui.util.buildFamilyExportDocument
 import com.bdavidgm.notasrec.ui.util.buildFamilyExportPackage
 import com.bdavidgm.notasrec.ui.util.checklistAsExportText
+import com.bdavidgm.notasrec.ui.util.ensurePureMarkdown
 import com.bdavidgm.notasrec.ui.util.hasExportablePhotos
 import com.bdavidgm.notasrec.ui.util.suggestedNoteExportFileName
 import com.bdavidgm.notasrec.ui.util.suggestedNotePhotosFolderName
@@ -343,6 +344,23 @@ class DetailViewModel(
         return familyExportNotes().any { hasExportablePhotos(it.content) }
     }
 
+    /** PDF con el mismo cuerpo que pinta la vista Markdown, fotos incluidas. */
+    fun exportNotePdf(destinationUri: Uri) {
+        viewModelScope.launch {
+            runExport {
+                val notes = familyExportNotes().map { note ->
+                    val body = if (note.kind == NoteKind.CHECKLIST) {
+                        checklistAsExportText(note.content)
+                    } else {
+                        note.content
+                    }
+                    note.copy(content = ensurePureMarkdown(body))
+                }
+                repository.writeNotePdf(destinationUri, notes)
+            }
+        }
+    }
+
     /** Solo texto: fotos como url; enlaces internos aplanados al texto visible. */
     fun exportNote(destinationUri: Uri, format: NoteExportFormat) {
         viewModelScope.launch {
@@ -382,12 +400,14 @@ class DetailViewModel(
                 val notes = familyExportNotes()
                 val title = notes.firstOrNull()?.title.orEmpty()
                 val folderName = suggestedNotePhotosFolderName(title)
+                val audios = repository.exportAudioFiles(noteId)
                 repository.writeNoteExportFiles(
                     treeUri = treeUri,
                     documentName = suggestedNoteExportFileName(title, format),
                     mimeType = format.mimeType,
                     photosFolderName = folderName,
                     photos = buildFamilyExportPackage(notes, format, folderName).photos,
+                    audios = audios,
                     buildDocument = { realFolderName ->
                         buildFamilyExportPackage(notes, format, realFolderName).document
                     },

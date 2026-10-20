@@ -45,6 +45,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -52,6 +54,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -109,9 +112,13 @@ fun ContentModeSelector(
 fun RichMarkdownFormatToolbar(
     state: RichTextState?,
     quoteSelected: Boolean,
+    codeSelected: Boolean,
+    inlineCodeSelected: Boolean,
     onInsertPhoto: () -> Unit,
     onInsertNoteLink: () -> Unit,
     onToggleQuote: () -> Unit,
+    onToggleCode: () -> Unit,
+    onToggleInlineCode: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showLinkDialog by remember { mutableStateOf(false) }
@@ -186,7 +193,14 @@ fun RichMarkdownFormatToolbar(
             FormatIconButton(
                 imageVector = Icons.Filled.Code,
                 contentDescription = stringResource(R.string.cd_format_code),
-                onClick = { state?.toggleCodeSpan() },
+                selected = codeSelected,
+                onClick = onToggleCode,
+            )
+            FormatTextButton(
+                label = "`",
+                contentDescription = stringResource(R.string.cd_format_inline_code),
+                selected = inlineCodeSelected,
+                onClick = onToggleInlineCode,
             )
             FormatIconButton(
                 imageVector = Icons.Filled.Link,
@@ -382,6 +396,27 @@ private fun FormatIconButton(
             imageVector = imageVector,
             contentDescription = contentDescription,
             tint = if (selected) Color.White else NegroTexto,
+        )
+    }
+}
+
+@Composable
+private fun FormatTextButton(
+    label: String,
+    contentDescription: String,
+    onClick: () -> Unit,
+    selected: Boolean = false,
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = (if (selected) Modifier.background(CelesteOscuro, CircleShape) else Modifier)
+            .semantics { this.contentDescription = contentDescription },
+    ) {
+        Text(
+            text = label,
+            color = if (selected) Color.White else NegroTexto,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
         )
     }
 }

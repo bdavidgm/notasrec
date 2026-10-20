@@ -79,6 +79,7 @@
     <string name="cd_format_numbered">Lista numerada</string>
     <string name="cd_format_quote">Cita</string>
     <string name="cd_format_code">Código</string>
+    <string name="cd_format_inline_code">Código en línea</string>
     <string name="cd_format_link">Enlace</string>
     <string name="cd_format_note_link">Enlazar nota</string>
     <string name="dialog_link_title">Insertar enlace</string>
@@ -138,6 +139,9 @@
     <string name="snackbar_note_copy_empty">Elige al menos un elemento para copiar.</string>
     <string name="action_export_txt">Exportar como .txt</string>
     <string name="action_export_md">Exportar como .md</string>
+    <string name="action_export_pdf">Exportar como PDF</string>
+    <string name="action_export_audio_zip">En un zip…</string>
+    <string name="action_export_audio_folder">A una carpeta…</string>
     <string name="dialog_export_note_title">Exportar nota</string>
     <string name="dialog_export_photos_title">Exportar con fotos</string>
     <string name="dialog_export_photos_message">Esta nota tiene fotos. Elige cómo llevártelas.</string>

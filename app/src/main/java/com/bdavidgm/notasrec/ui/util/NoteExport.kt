@@ -209,6 +209,8 @@ private fun readableExportContent(note: FamilyExportNote): String {
 fun suggestedNoteExportFileName(title: String, format: NoteExportFormat): String =
     "${exportBaseName(title)}.${format.extension}"
 
+fun suggestedNoteExportPdfFileName(title: String): String = "${exportBaseName(title)}.pdf"
+
 /** Nombre del ZIP que empaqueta la nota y sus fotos. */
 fun suggestedNoteExportZipFileName(title: String): String = "${exportBaseName(title)}.zip"
 

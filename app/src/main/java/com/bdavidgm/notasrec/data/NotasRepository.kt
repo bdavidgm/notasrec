@@ -29,7 +29,9 @@ import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import com.bdavidgm.notasrec.ui.util.FamilyExportNote
 import com.bdavidgm.notasrec.ui.util.NoteExportPhoto
+import com.bdavidgm.notasrec.ui.util.writeMarkdownPdf
 import com.bdavidgm.notasrec.ui.util.ParsedNoteDocument
 import com.bdavidgm.notasrec.reminder.ReminderScheduler
 import com.bdavidgm.notasrec.reminder.ReminderSounds
@@ -341,8 +343,21 @@ class NotasRepository(
                 val file = File(track.storedPath)
                 if (!file.isFile) continue
                 val extension = file.extension.ifBlank { "m4a" }
+                val base = track.displayName
+                    .substringBeforeLast('.')
+                    .ifBlank { "pista-${track.sortOrder}" }
+                    .replace(Regex("""[\\/:*?"<>|\n\r\t]"""), "_")
+                    .trim()
+                    .take(60)
+                    .ifBlank { "pista-${track.sortOrder}" }
+                var fileName = "$base.$extension"
+                var suffix = 2
+                while (out.any { it.fileName == fileName }) {
+                    fileName = "$base-$suffix.$extension"
+                    suffix++
+                }
                 out += NoteExportPhoto(
-                    fileName = "n${member.depth}-${track.sortOrder}.$extension",
+                    fileName = fileName,
                     source = file,
                 )
             }
@@ -467,6 +482,20 @@ class NotasRepository(
         }
 
     /**
+     * PDF con el cuerpo renderizado como la vista Markdown, en el URI elegido.
+     */
+    suspend fun writeNotePdf(destinationUri: Uri, notes: List<FamilyExportNote>) {
+        withContext(Dispatchers.IO) {
+            val out = if (android.os.Build.VERSION.SDK_INT >= 26) {
+                appContext.contentResolver.openOutputStream(destinationUri, "wt")
+            } else {
+                appContext.contentResolver.openOutputStream(destinationUri)
+            } ?: throw IOException("No se pudo escribir en el destino elegido.")
+            out.use { writeMarkdownPdf(appContext, notes, it) }
+        }
+    }
+
+    /**
      * Escribe el texto de una nota exportada en el URI elegido por el usuario (.txt / .md).
      */
     suspend fun writeTextExport(destinationUri: Uri, text: String) {
@@ -535,6 +564,7 @@ class NotasRepository(
         mimeType: String,
         photosFolderName: String,
         photos: List<NoteExportPhoto>,
+        audios: List<NoteExportPhoto> = emptyList(),
         buildDocument: (photosFolderName: String) -> String,
     ) {
         withContext(Dispatchers.IO) {
@@ -583,8 +613,33 @@ class NotasRepository(
                     } ?: throw IOException("No se pudo copiar ${photo.fileName}.")
                 }
             }
+
+            for (audio in audios.filter { it.source.isFile }) {
+                val audioUri = DocumentsContract.createDocument(
+                    resolver,
+                    parentUri,
+                    audioMimeType(audio.fileName),
+                    audio.fileName,
+                ) ?: throw IOException("No se pudo crear ${audio.fileName}.")
+                resolver.openOutputStream(audioUri)?.use { out ->
+                    audio.source.inputStream().use { input -> input.copyTo(out) }
+                } ?: throw IOException("No se pudo copiar ${audio.fileName}.")
+            }
         }
     }
+
+    private fun audioMimeType(fileName: String): String =
+        when (fileName.substringAfterLast('.', "").lowercase()) {
+            "mp3" -> "audio/mpeg"
+            "m4a", "mp4" -> "audio/mp4"
+            "aac" -> "audio/aac"
+            "ogg" -> "audio/ogg"
+            "wav" -> "audio/wav"
+            "3gp" -> "audio/3gpp"
+            "flac" -> "audio/flac"
+            "opus" -> "audio/opus"
+            else -> "application/octet-stream"
+        }
 
     private fun displayName(uri: Uri): String? =
         appContext.contentResolver.query(

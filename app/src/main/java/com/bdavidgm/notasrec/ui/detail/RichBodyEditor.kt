@@ -80,6 +80,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -91,6 +92,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.bdavidgm.notasrec.R
 import com.bdavidgm.notasrec.ui.theme.Celeste
+import com.bdavidgm.notasrec.ui.theme.CelesteClaro
 import com.bdavidgm.notasrec.ui.theme.CelesteOscuro
 import com.bdavidgm.notasrec.ui.theme.NegroTexto
 import com.bdavidgm.notasrec.ui.util.NOTE_LINK_BOUNDARY
@@ -172,14 +174,17 @@ private fun parseBodyBlocks(markdown: String, newId: () -> Long): List<BodyBlock
 private sealed interface MarkdownPiece {
     data class Prose(val markdown: String) : MarkdownPiece
     data class Quote(val markdown: String) : MarkdownPiece
+    data class Code(val markdown: String) : MarkdownPiece
 }
 
-/** Separa las líneas `>` para pintarlas como cita; el editor no las entiende. */
+/** Separa citas y bloques de código para pintarlos; el editor no los entiende. */
 private fun splitMarkdownPieces(markdown: String): List<MarkdownPiece> {
     if (markdown.isEmpty()) return listOf(MarkdownPiece.Prose(""))
     val pieces = mutableListOf<MarkdownPiece>()
     val buffer = mutableListOf<String>()
+    val codeBuffer = mutableListOf<String>()
     var quoting = false
+    var inCode = false
     fun flush() {
         if (buffer.isEmpty()) return
         val text = buffer.joinToString("\n")
@@ -187,7 +192,22 @@ private fun splitMarkdownPieces(markdown: String): List<MarkdownPiece> {
         if (quoting) pieces += MarkdownPiece.Quote(text)
         else if (text.isNotBlank()) pieces += MarkdownPiece.Prose(text)
     }
+    fun flushCode() {
+        pieces += MarkdownPiece.Code(codeBuffer.joinToString("\n"))
+        codeBuffer.clear()
+    }
     for (line in markdown.lines()) {
+        if (isCodeFenceLine(line)) {
+            flush()
+            if (inCode) flushCode()
+            inCode = !inCode
+            quoting = false
+            continue
+        }
+        if (inCode) {
+            codeBuffer += line
+            continue
+        }
         val content = quoteLineContent(line)
         val isQuote = content != null
         if (isQuote != quoting) flush()
@@ -195,6 +215,7 @@ private fun splitMarkdownPieces(markdown: String): List<MarkdownPiece> {
         buffer += content ?: line
     }
     flush()
+    if (inCode) flushCode()
     return pieces.ifEmpty { listOf(MarkdownPiece.Prose(markdown)) }
 }
 
@@ -208,11 +229,31 @@ private fun quoteMarkdown(body: String): String =
 
 private const val QUOTE_MARKER = "\u200b▎"
 private const val QUOTE_PREFIX = "$QUOTE_MARKER "
+private const val CODE_MARKER = "\u200b\u2063"
+private const val CODE_PREFIX = CODE_MARKER
+private const val INLINE_CODE_MARKER = "\u200b\u2064"
+private const val INLINE_CODE_PREFIX = INLINE_CODE_MARKER
 private const val NORMAL_PARAGRAPH_MARKER = "\u2060"
 private val quoteParagraphStyle = ParagraphStyle(
     textIndent = TextIndent(firstLine = 10.sp, restLine = 10.sp),
 )
 private val quoteMarkerStyle = SpanStyle(color = CelesteOscuro)
+private val codeSpanStyle = SpanStyle(
+    fontFamily = FontFamily.Monospace,
+    background = Color(0xFFF3F4F6),
+)
+private val inlineCodeSpanStyle = SpanStyle(
+    fontFamily = FontFamily.Monospace,
+    background = CelesteClaro,
+)
+private val inlineCodeLine = Regex("^`([^`]*)`$")
+
+private fun isCodeFenceLine(line: String): Boolean {
+    val trimmed = line.trim()
+    if (!trimmed.startsWith("```")) return false
+    val info = trimmed.removePrefix("```")
+    return info.isEmpty() || info.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '+' }
+}
 
 /** Sustituye el marcador Markdown por una barra visual que el editor no interpreta. */
 private fun protectBlockQuotes(markdown: String): String =
@@ -224,10 +265,76 @@ private fun protectBlockQuotes(markdown: String): String =
         }
     }
 
+/** El editor no pinta ```; cada línea del bloque lleva un marcador invisible. */
+private fun protectCodeFences(markdown: String): String {
+    val out = mutableListOf<String>()
+    var inCode = false
+    for (line in markdown.lines()) {
+        if (isCodeFenceLine(line)) {
+            inCode = !inCode
+            continue
+        }
+        out += if (inCode && !line.startsWith(CODE_MARKER)) CODE_MARKER + line else line
+    }
+    return out.joinToString("\n")
+}
+
+private fun prepareEditorMarkdown(markdown: String): String =
+    protectBlockQuotes(protectInlineCodeLines(protectCodeFences(markdown)))
+
+/** Una línea entera `` `texto` `` entra al editor como código en línea de varias líneas. */
+private fun protectInlineCodeLines(markdown: String): String =
+    markdown.lines().joinToString("\n") { line ->
+        if (line.startsWith(CODE_MARKER) || line.startsWith(INLINE_CODE_MARKER)) {
+            line
+        } else {
+            val inner = inlineCodeLine.matchEntire(line)?.groupValues?.get(1) ?: return@joinToString line
+            INLINE_CODE_MARKER + inner.removePrefix("\u200b")
+        }
+    }
+
 private fun normalizeQuoteMarkers(markdown: String): String =
     markdown
         .replace(QUOTE_MARKER, ">")
         .replace(NORMAL_PARAGRAPH_MARKER, "")
+
+private fun normalizeCodeMarkers(markdown: String): String {
+    val out = mutableListOf<String>()
+    var inCode = false
+    fun close() {
+        if (inCode) {
+            out += "```"
+            inCode = false
+        }
+    }
+    for (line in markdown.lines()) {
+        if (line.startsWith(CODE_MARKER)) {
+            if (!inCode) {
+                out += "```"
+                inCode = true
+            }
+            out += line.removePrefix(CODE_MARKER)
+        } else {
+            close()
+            out += line
+        }
+    }
+    close()
+    return out.joinToString("\n")
+}
+
+private fun normalizeInlineCodeMarkers(markdown: String): String =
+    markdown.lines().joinToString("\n") { line ->
+        if (!line.startsWith(INLINE_CODE_MARKER)) {
+            line
+        } else {
+            val content = line.removePrefix(INLINE_CODE_MARKER)
+            if (content.isEmpty()) "`\u200b`" else "`$content`"
+        }
+    }
+
+private fun exportEditorMarkdown(markdown: String): String =
+    normalizeInlineCodeMarkers(normalizeCodeMarkers(normalizeQuoteMarkers(markdown)))
 
 /** Aplica el aspecto de cita sin separar el párrafo en otro editor. */
 private fun renderBlockQuotes(state: RichTextState) {
@@ -249,18 +356,181 @@ private fun renderBlockQuotes(state: RichTextState) {
     state.selection = previousSelection
 }
 
+private fun isInCodeParagraph(state: RichTextState): Boolean =
+    isInCodeParagraph(state.annotatedString, state.selection.min)
+
+private fun isInCodeParagraph(text: AnnotatedString, cursor: Int): Boolean {
+    if (text.isEmpty()) return false
+    return text.text.startsWith(CODE_MARKER, paragraphStart(text, cursor))
+}
+
+private fun codeContentStart(paragraphStart: Int): Int = paragraphStart + CODE_MARKER.length
+
+/** Aplica el aspecto de código sin separar el párrafo en otro editor. */
+private fun renderCodeBlocks(state: RichTextState) {
+    val previousSelection = state.selection
+    val ranges = state.annotatedString.paragraphStyles
+        .filter { state.annotatedString.text.startsWith(CODE_MARKER, it.start) }
+        .ifEmpty {
+            if (state.annotatedString.text.startsWith(CODE_MARKER)) {
+                listOf(AnnotatedString.Range(ParagraphStyle(), 0, state.annotatedString.length))
+            } else {
+                emptyList()
+            }
+        }
+    ranges.forEach { range ->
+        if (range.end > range.start) {
+            state.addSpanStyle(codeSpanStyle, TextRange(range.start, range.end))
+        }
+    }
+    state.selection = previousSelection
+    if (isInCodeParagraph(state)) state.addSpanStyle(codeSpanStyle)
+}
+
+private fun isInInlineCodeParagraph(state: RichTextState): Boolean =
+    isInInlineCodeParagraph(state.annotatedString, state.selection.min)
+
+private fun isInInlineCodeParagraph(text: AnnotatedString, cursor: Int): Boolean {
+    if (text.isEmpty()) return false
+    return text.text.startsWith(INLINE_CODE_MARKER, paragraphStart(text, cursor))
+}
+
+private fun inlineCodeContentStart(paragraphStart: Int): Int =
+    paragraphStart + INLINE_CODE_MARKER.length
+
+private fun renderInlineCode(state: RichTextState) {
+    val previousSelection = state.selection
+    val ranges = state.annotatedString.paragraphStyles
+        .filter { state.annotatedString.text.startsWith(INLINE_CODE_MARKER, it.start) }
+        .ifEmpty {
+            if (state.annotatedString.text.startsWith(INLINE_CODE_MARKER)) {
+                listOf(AnnotatedString.Range(ParagraphStyle(), 0, state.annotatedString.length))
+            } else {
+                emptyList()
+            }
+        }
+    ranges.forEach { range ->
+        if (range.end > range.start) {
+            state.addSpanStyle(inlineCodeSpanStyle, TextRange(range.start, range.end))
+        }
+    }
+    state.selection = previousSelection
+    if (isInInlineCodeParagraph(state)) state.addSpanStyle(inlineCodeSpanStyle)
+}
+
+private fun continueInlineCode(state: RichTextState) {
+    state.addTextAfterSelection("\n$INLINE_CODE_PREFIX")
+    renderInlineCode(state)
+}
+
+/** Backspace al comienzo de la última línea quita solo el código en línea de esa línea. */
+private fun exitInlineCodeWithBackspace(state: RichTextState): Boolean {
+    val selection = state.selection
+    if (!selection.collapsed) return false
+    val start = paragraphStart(state, selection.min)
+    if (!state.annotatedString.text.startsWith(INLINE_CODE_MARKER, start)) return false
+    if (selection.min != inlineCodeContentStart(start)) return false
+
+    val nextParagraphStart = state.annotatedString.paragraphStyles
+        .map { it.start }
+        .firstOrNull { it > start }
+    if (
+        nextParagraphStart != null &&
+        state.annotatedString.text.startsWith(INLINE_CODE_MARKER, nextParagraphStart)
+    ) {
+        return false
+    }
+
+    val end = paragraphEnd(state, selection.min).coerceAtMost(state.annotatedString.length)
+    state.selection = TextRange(start)
+    state.removeSpanStyle(inlineCodeSpanStyle, TextRange(start, end))
+    state.removeTextRange(TextRange(start, inlineCodeContentStart(start)))
+    return true
+}
+
+/**
+ * Activa el código en línea en el párrafo actual. Si ya lo es, el texto se queda
+ * igual y el cursor pasa al párrafo siguiente.
+ */
+private fun toggleInlineCodeParagraph(state: RichTextState) {
+    val text = state.annotatedString.text
+    val cursor = state.selection.min.coerceIn(0, text.length)
+    val start = paragraphStart(state, cursor)
+    if (isInInlineCodeParagraph(state)) {
+        val end = paragraphEnd(state, cursor).coerceAtMost(text.length)
+        state.selection = TextRange(end)
+        state.addTextAtIndex(end, "\n$NORMAL_PARAGRAPH_MARKER")
+    } else {
+        state.selection = TextRange(start)
+        state.addTextAtIndex(start, INLINE_CODE_PREFIX)
+        renderInlineCode(state)
+    }
+}
+
+private fun continueCodeBlock(state: RichTextState) {
+    state.addTextAfterSelection("\n$CODE_PREFIX")
+    renderCodeBlocks(state)
+}
+
+/** Backspace al comienzo de la última línea de código quita solo el formato de esa línea. */
+private fun exitCodeBlockWithBackspace(state: RichTextState): Boolean {
+    val selection = state.selection
+    if (!selection.collapsed) return false
+    val start = paragraphStart(state, selection.min)
+    if (!state.annotatedString.text.startsWith(CODE_MARKER, start)) return false
+    if (selection.min != codeContentStart(start)) return false
+
+    val nextParagraphStart = state.annotatedString.paragraphStyles
+        .map { it.start }
+        .firstOrNull { it > start }
+    if (
+        nextParagraphStart != null &&
+        state.annotatedString.text.startsWith(CODE_MARKER, nextParagraphStart)
+    ) {
+        return false
+    }
+
+    val end = paragraphEnd(state, selection.min).coerceAtMost(state.annotatedString.length)
+    state.selection = TextRange(start)
+    state.removeSpanStyle(codeSpanStyle, TextRange(start, end))
+    state.removeTextRange(TextRange(start, codeContentStart(start)))
+    return true
+}
+
+/**
+ * Activa el bloque de código en el párrafo actual. Si ya lo es, el código se
+ * queda igual y el cursor pasa al párrafo siguiente.
+ */
+private fun toggleCodeParagraph(state: RichTextState) {
+    val text = state.annotatedString.text
+    val cursor = state.selection.min.coerceIn(0, text.length)
+    val start = paragraphStart(state, cursor)
+    if (isInCodeParagraph(state)) {
+        val end = paragraphEnd(state, cursor).coerceAtMost(text.length)
+        state.selection = TextRange(end)
+        state.addTextAtIndex(end, "\n$NORMAL_PARAGRAPH_MARKER")
+    } else {
+        state.selection = TextRange(start)
+        state.addTextAtIndex(start, CODE_PREFIX)
+        renderCodeBlocks(state)
+    }
+}
+
+private fun paragraphStart(text: AnnotatedString, cursor: Int): Int {
+    val boundedCursor = cursor.coerceIn(0, text.length)
+    val range = text.paragraphStyles.lastOrNull {
+        boundedCursor >= it.start && boundedCursor < it.end
+    } ?: text.paragraphStyles.lastOrNull { boundedCursor == it.end }
+    return range?.start ?: 0
+}
+
 private fun isInQuoteParagraph(state: RichTextState): Boolean {
     return isInQuoteParagraph(state.annotatedString, state.selection.min)
 }
 
 private fun isInQuoteParagraph(text: AnnotatedString, cursor: Int): Boolean {
     if (text.isEmpty()) return false
-    val boundedCursor = cursor.coerceIn(0, text.length)
-    val range = text.paragraphStyles.lastOrNull {
-        boundedCursor >= it.start && boundedCursor < it.end
-    } ?: text.paragraphStyles.lastOrNull { boundedCursor == it.end }
-    val start = range?.start ?: 0
-    return text.text.startsWith(QUOTE_MARKER, start)
+    return text.text.startsWith(QUOTE_MARKER, paragraphStart(text, cursor))
 }
 
 private fun quoteContentStart(state: RichTextState, paragraphStart: Int): Int {
@@ -622,11 +892,21 @@ internal fun RichMarkdownDraftEditor(viewModel: DetailViewModel) {
     RichMarkdownFormatToolbar(
         state = activeState,
         quoteSelected = activeState?.let(::isInQuoteParagraph) == true,
+        codeSelected = activeState?.let(::isInCodeParagraph) == true,
+        inlineCodeSelected = activeState?.let(::isInInlineCodeParagraph) == true,
         onInsertPhoto = { showPhotoDialog = true },
         onInsertNoteLink = { activeState?.let { noteLinkState = it } },
         onToggleQuote = {
             val editor = activeState ?: return@RichMarkdownFormatToolbar
             toggleQuoteParagraph(editor)
+        },
+        onToggleCode = {
+            val editor = activeState ?: return@RichMarkdownFormatToolbar
+            toggleCodeParagraph(editor)
+        },
+        onToggleInlineCode = {
+            val editor = activeState ?: return@RichMarkdownFormatToolbar
+            toggleInlineCodeParagraph(editor)
         },
     )
 
@@ -735,14 +1015,16 @@ private fun BodyTextBlock(
             // rc10 atribuye la escritura en el borde derecho de un enlace al
             // párrafo siguiente (#709). Un límite invisible de estilo normal
             // elimina la ambigüedad también en enlaces guardados anteriormente.
-            setMarkdown(ensureRichLinkBoundaries(protectBlockQuotes(initialMarkdown)))
+            setMarkdown(ensureRichLinkBoundaries(prepareEditorMarkdown(initialMarkdown)))
             renderBlockQuotes(this)
+            renderCodeBlocks(this)
+            renderInlineCode(this)
             selection = TextRange.Zero
         }
     }
     // El round-trip del Markdown normaliza (listas, énfasis…), así que la
     // referencia es lo que el editor devuelve, no lo que se le dio.
-    var lastKnown by remember { mutableStateOf(normalizeQuoteMarkers(state.toPureMarkdown())) }
+    var lastKnown by remember { mutableStateOf(exportEditorMarkdown(state.toPureMarkdown())) }
     val interactionSource = remember { MutableInteractionSource() }
     val focusRequester = remember { FocusRequester() }
     val currentOnEdited by rememberUpdatedState(onEdited)
@@ -752,7 +1034,7 @@ private fun BodyTextBlock(
     DisposableEffect(state) {
         onRegisterHandle(
             BodyTextHandle(
-                snapshot = { normalizeQuoteMarkers(state.toPureMarkdown()) },
+                snapshot = { exportEditorMarkdown(state.toPureMarkdown()) },
                 paragraphIndex = {
                     val cursor = state.selection.min
                     val styles = state.annotatedString.paragraphStyles
@@ -761,19 +1043,21 @@ private fun BodyTextBlock(
                 },
                 splitAtCursor = {
                     state.addTextAfterSelection(SPLIT_MARK)
-                    val parts = normalizeQuoteMarkers(state.toPureMarkdown()).split(SPLIT_MARK, limit = 2)
+                    val parts = exportEditorMarkdown(state.toPureMarkdown()).split(SPLIT_MARK, limit = 2)
                     parts[0] to parts.getOrElse(1) { "" }
                 },
                 replace = { markdown, cursor ->
-                    state.setMarkdown(ensureRichLinkBoundaries(protectBlockQuotes(markdown)))
+                    state.setMarkdown(ensureRichLinkBoundaries(prepareEditorMarkdown(markdown)))
                     renderBlockQuotes(state)
+                    renderCodeBlocks(state)
+                    renderInlineCode(state)
                     val bounded = cursor.coerceIn(0, state.annotatedString.length)
                     state.selection = TextRange(bounded)
                 },
             ),
         )
         onDispose {
-            currentOnFlush(normalizeQuoteMarkers(state.toPureMarkdown()))
+            currentOnFlush(exportEditorMarkdown(state.toPureMarkdown()))
             onRegisterHandle(null)
         }
     }
@@ -785,7 +1069,7 @@ private fun BodyTextBlock(
             .drop(1)
             .debounce(400)
             .collect {
-                val markdown = normalizeQuoteMarkers(state.toPureMarkdown())
+                val markdown = exportEditorMarkdown(state.toPureMarkdown())
                 if (markdown == lastKnown) return@collect
                 lastKnown = markdown
                 currentOnEdited(markdown)
@@ -821,15 +1105,33 @@ private fun BodyTextBlock(
                         previousSelection.collapsed &&
                         text.length == previousText.length + 1 &&
                         selection.min == previousSelection.min + 1 &&
-                        isInQuoteParagraph(previousText, previousSelection.min) &&
-                        !isInQuoteParagraph(text, selection.min) &&
                         text.text.getOrNull(selection.min - 1) == ' '
+                val continueQuote = enteredNewParagraph &&
+                    isInQuoteParagraph(previousText, previousSelection.min) &&
+                    !isInQuoteParagraph(text, selection.min)
+                val continueCode = enteredNewParagraph &&
+                    isInCodeParagraph(previousText, previousSelection.min) &&
+                    !isInCodeParagraph(text, selection.min)
+
+                val continueInlineCode = enteredNewParagraph &&
+                    isInInlineCodeParagraph(previousText, previousSelection.min) &&
+                    !isInInlineCodeParagraph(text, selection.min)
 
                 previousText = text
                 previousSelection = selection
-                if (enteredNewParagraph) {
-                    state.addTextAfterSelection(QUOTE_PREFIX)
-                    renderBlockQuotes(state)
+                when {
+                    continueInlineCode -> {
+                        state.addTextAfterSelection(INLINE_CODE_PREFIX)
+                        renderInlineCode(state)
+                    }
+                    continueCode -> {
+                        state.addTextAfterSelection(CODE_PREFIX)
+                        renderCodeBlocks(state)
+                    }
+                    continueQuote -> {
+                        state.addTextAfterSelection(QUOTE_PREFIX)
+                        renderBlockQuotes(state)
+                    }
                 }
             }
     }
@@ -856,15 +1158,25 @@ private fun BodyTextBlock(
                 if (event.type != KeyEventType.KeyDown) {
                     return@onPreviewKeyEvent false
                 }
-                if (
-                    event.key == Key.Enter &&
-                    state.selection.collapsed &&
-                    isInQuoteParagraph(state)
-                ) {
-                    continueBlockQuote(state)
-                    return@onPreviewKeyEvent true
+                if (event.key == Key.Enter && state.selection.collapsed) {
+                    when {
+                        isInInlineCodeParagraph(state) -> {
+                            continueInlineCode(state)
+                            return@onPreviewKeyEvent true
+                        }
+                        isInCodeParagraph(state) -> {
+                            continueCodeBlock(state)
+                            return@onPreviewKeyEvent true
+                        }
+                        isInQuoteParagraph(state) -> {
+                            continueBlockQuote(state)
+                            return@onPreviewKeyEvent true
+                        }
+                    }
                 }
                 if (event.key != Key.Backspace) return@onPreviewKeyEvent false
+                if (exitInlineCodeWithBackspace(state)) return@onPreviewKeyEvent true
+                if (exitCodeBlockWithBackspace(state)) return@onPreviewKeyEvent true
                 if (exitBlockQuoteWithBackspace(state)) return@onPreviewKeyEvent true
                 val selection = state.selection
                 if (!selection.collapsed || selection.start != 0) return@onPreviewKeyEvent false
@@ -1024,6 +1336,15 @@ private fun ReadOnlyTextBlock(markdown: String) {
                         }
                     }
                 }
+                is MarkdownPiece.Code -> Text(
+                    text = piece.markdown.ifBlank { " " },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFF3F4F6), RoundedCornerShape(6.dp))
+                        .padding(10.dp),
+                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
+                    color = NegroTexto,
+                )
             }
         }
     }
