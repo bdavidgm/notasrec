@@ -6,7 +6,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
@@ -69,18 +68,32 @@ fun writeMarkdownPdf(
     }
     val document = PdfDocument()
     val writer = PdfPageWriter(document, metrics)
-    notes.forEachIndexed { index, note ->
-        if (index > 0) writer.gap(dp(metrics, 28f))
-        writer.drawLayout(layoutOf(note.title.ifBlank { context.getString(R.string.untitled_note) }, titlePaint(), metrics, writer.contentWidth))
-        val body = removeRichLinkBoundaries(note.content).trim()
-        if (body.isNotEmpty()) {
-            writer.gap(dp(metrics, 12f))
-            drawMarkdown(writer, body, metrics)
+    try {
+        if (notes.isEmpty()) {
+            writer.drawLayout(layoutOf(context.getString(R.string.untitled_note), titlePaint(), metrics, writer.contentWidth))
         }
+        notes.forEachIndexed { index, note ->
+            if (index > 0) writer.gap(dp(metrics, 28f))
+            writer.drawLayout(
+                layoutOf(
+                    note.title.ifBlank { context.getString(R.string.untitled_note) },
+                    titlePaint(),
+                    metrics,
+                    writer.contentWidth,
+                ),
+            )
+            val body = removeRichLinkBoundaries(note.content).trim()
+            if (body.isNotEmpty()) {
+                writer.gap(dp(metrics, 12f))
+                drawMarkdown(writer, body, metrics)
+            }
+        }
+        writer.finish()
+        document.writeTo(output)
+    } finally {
+        writer.finish()
+        document.close()
     }
-    writer.finish()
-    document.writeTo(output)
-    document.close()
 }
 
 private sealed interface MarkdownPiece {
@@ -148,8 +161,14 @@ private fun richLayout(markdown: String, width: Int, metrics: DisplayMetrics): S
 }
 
 private fun layoutOf(text: String, paint: TextPaint, metrics: DisplayMetrics, width: Int): StaticLayout {
-    val span = SpannableStringBuilder(text).apply {
-        setSpan(AbsoluteSizeSpan(paint.textSize.roundToInt(), false), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    val span = SpannableStringBuilder(text)
+    if (span.isNotEmpty()) {
+        span.setSpan(
+            AbsoluteSizeSpan(paint.textSize.roundToInt().coerceAtLeast(1), false),
+            0,
+            span.length,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
     }
     return staticLayout(span, width, paint)
 }
@@ -182,18 +201,26 @@ private fun AnnotatedString.slice(
     paragraph: ParagraphStyle?,
     metrics: DisplayMetrics,
 ): CharSequence {
-    val out = SpannableStringBuilder(text.substring(start, end))
+    val safeStart = start.coerceIn(0, text.length)
+    val safeEnd = end.coerceIn(safeStart, text.length)
+    val out = SpannableStringBuilder(text.substring(safeStart, safeEnd))
     spanStyles.forEach { range ->
-        val from = maxOf(range.start, start)
-        val to = minOf(range.end, end)
-        if (from < to) out.applySpan(range.item, from - start, to - start, metrics)
+        val from = maxOf(range.start, safeStart)
+        val to = minOf(range.end, safeEnd)
+        if (from < to) out.applySpan(range.item, from - safeStart, to - safeStart, metrics)
     }
     paragraph?.let { style ->
+        if (out.isEmpty()) return@let
         val indent = style.textIndent
-        val first = indent?.firstLine.toExportPx(metrics)
-        val rest = indent?.restLine.toExportPx(metrics)
-        if (first != 0 || rest != 0) {
-            out.setSpan(LeadingMarginSpan.Standard(first, rest), 0, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val first = indent?.firstLine.toExportPx(metrics).coerceAtLeast(0)
+        val rest = indent?.restLine.toExportPx(metrics).coerceAtLeast(0)
+        if (first > 0 || rest > 0) {
+            out.setSpan(
+                LeadingMarginSpan.Standard(first, rest),
+                0,
+                out.length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
         }
         val alignment = when (style.textAlign) {
             TextAlign.Center -> Layout.Alignment.ALIGN_CENTER
@@ -221,6 +248,7 @@ private fun SpannableStringBuilder.applySpan(
         italic -> Typeface.ITALIC
         else -> 0
     }
+    if (start < 0 || end > length || start >= end) return
     if (typefaceStyle != 0) {
         setSpan(StyleSpan(typefaceStyle), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
@@ -293,7 +321,7 @@ private class PdfPageWriter(
         while (line < layout.lineCount) {
             ensurePage()
             val available = contentBottom - y
-            val lineHeight = layout.getLineBottom(line) - layout.getLineTop(line)
+            val lineHeight = (layout.getLineBottom(line) - layout.getLineTop(line)).coerceAtLeast(1)
             if (lineHeight > available && y > PAGE_MARGIN) {
                 finishPage()
                 continue
@@ -336,24 +364,26 @@ private class PdfPageWriter(
             if (alt.isNotBlank()) drawLayout(layoutOf(alt, bodyPaint(), metrics, contentWidth))
             return
         }
+        if (bitmap.width <= 0 || bitmap.height <= 0) {
+            bitmap.recycle()
+            return
+        }
         val maxHeight = dp(metrics, 360f).toFloat()
         val scale = min(contentWidth / bitmap.width.toFloat(), maxHeight / bitmap.height.toFloat())
+        if (!scale.isFinite() || scale <= 0f) {
+            bitmap.recycle()
+            return
+        }
         val drawWidth = bitmap.width * scale
         val drawHeight = bitmap.height * scale
         if (page != null && y > PAGE_MARGIN && y + drawHeight > contentBottom) finishPage()
         ensurePage()
         val left = PAGE_MARGIN + (contentWidth - drawWidth) / 2f
         val dest = RectF(left, y.toFloat(), left + drawWidth, y + drawHeight)
-        val canvas = canvas()
-        canvas.save()
-        val clip = Path().apply {
-            addRoundRect(dest, dp(metrics, 8f).toFloat(), dp(metrics, 8f).toFloat(), Path.Direction.CW)
-        }
-        canvas.clipPath(clip)
-        canvas.drawBitmap(bitmap, null, dest, bitmapPaint)
-        canvas.restore()
+        // El lienzo del PDF no admite clipPath: en algunos equipos cierra el proceso.
+        canvas().drawBitmap(bitmap, null, dest, bitmapPaint)
         bitmap.recycle()
-        y += drawHeight.roundToInt()
+        y += drawHeight.roundToInt().coerceAtLeast(1)
     }
 
     fun finish() {
@@ -391,10 +421,19 @@ private fun decodePhoto(url: String, maxWidth: Int, maxHeight: Int): Bitmap? {
     BitmapFactory.decodeFile(file.path, bounds)
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
     var sample = 1
-    while (bounds.outWidth / sample > maxWidth * 2 || bounds.outHeight / sample > maxHeight * 2) {
+    while (
+        sample < 64 &&
+        (bounds.outWidth / sample > maxWidth * 2 || bounds.outHeight / sample > maxHeight * 2)
+    ) {
         sample *= 2
     }
-    val options = BitmapFactory.Options().apply { inSampleSize = sample }
-    if (Build.VERSION.SDK_INT >= 26) options.inPreferredConfig = Bitmap.Config.ARGB_8888
-    return BitmapFactory.decodeFile(file.path, options)
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = sample
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    val decoded = BitmapFactory.decodeFile(file.path, options) ?: return null
+    if (Build.VERSION.SDK_INT < 26 || decoded.config != Bitmap.Config.HARDWARE) return decoded
+    val software = decoded.copy(Bitmap.Config.ARGB_8888, false)
+    decoded.recycle()
+    return software
 }

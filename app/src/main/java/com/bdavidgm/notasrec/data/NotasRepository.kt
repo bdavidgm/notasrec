@@ -19,6 +19,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -483,17 +484,48 @@ class NotasRepository(
 
     /**
      * PDF con el cuerpo renderizado como la vista Markdown, en el URI elegido.
+     * Se arma entero en memoria antes de abrir el destino: el selector ya creó
+     * el archivo vacío y un fallo a mitad de la escritura lo dejaba en 0 bytes.
      */
     suspend fun writeNotePdf(destinationUri: Uri, notes: List<FamilyExportNote>) {
-        withContext(Dispatchers.IO) {
-            val out = if (android.os.Build.VERSION.SDK_INT >= 26) {
-                appContext.contentResolver.openOutputStream(destinationUri, "wt")
-            } else {
-                appContext.contentResolver.openOutputStream(destinationUri)
-            } ?: throw IOException("No se pudo escribir en el destino elegido.")
-            out.use { writeMarkdownPdf(appContext, notes, it) }
+        val bytes = try {
+            // RichTextState usa el estado de Compose y no es seguro fuera del hilo principal.
+            withContext(Dispatchers.Main) {
+                ByteArrayOutputStream().also { buffer ->
+                    writeMarkdownPdf(appContext, notes, buffer)
+                }.toByteArray()
+            }
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            discardEmptyExport(destinationUri)
+            throw t.asExportFailure()
+        }
+        if (bytes.isEmpty()) {
+            discardEmptyExport(destinationUri)
+            throw IOException("No se pudo crear el PDF.")
+        }
+        try {
+            withContext(Dispatchers.IO) {
+                val out = if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    appContext.contentResolver.openOutputStream(destinationUri, "wt")
+                } else {
+                    appContext.contentResolver.openOutputStream(destinationUri)
+                } ?: throw IOException("No se pudo escribir en el destino elegido.")
+                out.use { it.write(bytes) }
+            }
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            discardEmptyExport(destinationUri)
+            throw t.asExportFailure()
         }
     }
+
+    private fun discardEmptyExport(destinationUri: Uri) {
+        runCatching { appContext.contentResolver.delete(destinationUri, null, null) }
+    }
+
+    private fun Throwable.asExportFailure(): Exception =
+        this as? Exception ?: IOException("No se pudo crear el PDF.", this)
 
     /**
      * Escribe el texto de una nota exportada en el URI elegido por el usuario (.txt / .md).
