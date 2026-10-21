@@ -217,8 +217,9 @@ fun DetailScreen(
     }
 
     val exportMdLauncher = rememberLauncherForActivityResult(
-        // text/markdown falla en varios selectores; el nombre .md basta.
-        contract = ActivityResultContracts.CreateDocument("text/plain"),
+        // text/plain hace que el selector añada .txt (nombre.md.txt).
+        // */* conserva el nombre que escribe el usuario.
+        contract = ActivityResultContracts.CreateDocument("*/*"),
     ) { uri ->
         val format = pendingExportFormat?.toExportFormat()
         pendingExportFormat = null
