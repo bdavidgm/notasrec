@@ -217,9 +217,8 @@ fun DetailScreen(
     }
 
     val exportMdLauncher = rememberLauncherForActivityResult(
-        // text/plain hace que el selector añada .txt (nombre.md.txt).
-        // */* conserva el nombre que escribe el usuario.
-        contract = ActivityResultContracts.CreateDocument("*/*"),
+        // Evita que el selector trate Markdown como texto plano y añada .txt.
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
     ) { uri ->
         val format = pendingExportFormat?.toExportFormat()
         pendingExportFormat = null

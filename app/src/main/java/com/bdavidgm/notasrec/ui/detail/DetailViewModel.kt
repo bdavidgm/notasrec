@@ -366,8 +366,13 @@ class DetailViewModel(
         viewModelScope.launch {
             runExport {
                 val notes = familyExportNotes()
+                val realDestination = if (format == NoteExportFormat.MD) {
+                    repository.normalizeMarkdownDestination(destinationUri)
+                } else {
+                    destinationUri
+                }
                 repository.writeTextExport(
-                    destinationUri = destinationUri,
+                    destinationUri = realDestination,
                     text = buildFamilyExportDocument(notes, format),
                 )
             }

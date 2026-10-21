@@ -3,6 +3,7 @@ package com.bdavidgm.notasrec.data
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import com.bdavidgm.notasrec.data.local.NoteAudioEntity
 import com.bdavidgm.notasrec.data.local.NoteEntity
 import com.bdavidgm.notasrec.data.local.NoteImageEntity
@@ -539,6 +540,38 @@ class NotasRepository(
             }
         }
     }
+
+    /**
+     * Algunos selectores añaden una extensión según el MIME aunque el usuario
+     * ya haya escrito el nombre. Quita únicamente el sufijo que agregaron
+     * después de .md y devuelve el URI nuevo que crea renameDocument.
+     */
+    suspend fun normalizeMarkdownDestination(destinationUri: Uri): Uri =
+        withContext(Dispatchers.IO) {
+            val resolver = appContext.contentResolver
+            val actualName = runCatching {
+                resolver.query(
+                    destinationUri,
+                    arrayOf(OpenableColumns.DISPLAY_NAME),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }
+            }.getOrNull() ?: return@withContext destinationUri
+
+            val wantedName = when {
+                actualName.endsWith(".md.txt", ignoreCase = true) ->
+                    actualName.dropLast(4)
+                actualName.endsWith(".md.bin", ignoreCase = true) ->
+                    actualName.dropLast(4)
+                else -> return@withContext destinationUri
+            }
+            runCatching {
+                DocumentsContract.renameDocument(resolver, destinationUri, wantedName)
+            }.getOrNull() ?: destinationUri
+        }
 
     /**
      * Empaqueta la nota y sus fotos en un ZIP: el documento en la raíz y las
