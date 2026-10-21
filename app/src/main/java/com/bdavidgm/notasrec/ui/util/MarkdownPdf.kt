@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
@@ -30,6 +31,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +40,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
 import com.bdavidgm.notasrec.R
+import com.mohamedrejeb.richeditor.model.RichSpanStyle
 import com.mohamedrejeb.richeditor.model.RichTextState
 import java.io.File
 import java.io.OutputStream
@@ -49,6 +52,8 @@ private const val PAGE_HEIGHT = 842
 private const val PAGE_MARGIN = 40
 private const val BODY_SP = 16f
 private const val QUOTE_COLOR = 0xFF3D95C6.toInt()
+private const val CODE_CAPSULE_RADIUS = 8f
+private const val CODE_CAPSULE_PAD = 2f
 
 private val imageMarkdown = Regex("""!\[([^\]]*)]\(([^)\n]+)\)""")
 
@@ -100,6 +105,7 @@ private sealed interface MarkdownPiece {
     data class Prose(val markdown: String) : MarkdownPiece
     data class Quote(val markdown: String) : MarkdownPiece
     data class Photo(val alt: String, val url: String) : MarkdownPiece
+    data class Code(val markdown: String) : MarkdownPiece
 }
 
 private fun drawMarkdown(writer: PdfPageWriter, markdown: String, metrics: DisplayMetrics) {
@@ -114,12 +120,51 @@ private fun drawMarkdown(writer: PdfPageWriter, markdown: String, metrics: Displ
                 quoted = true,
             )
             is MarkdownPiece.Photo -> writer.drawPhoto(piece.url, piece.alt, metrics)
+            is MarkdownPiece.Code -> writer.drawCode(piece.markdown, metrics)
         }
     }
 }
 
+/**
+ * El parser de Markdown no emite el texto de los bloques ```, así que hay que
+ * separarlos antes. Dentro del bloque no se interpretan citas ni fotos.
+ */
 private fun splitMarkdown(markdown: String): List<MarkdownPiece> {
     if (markdown.isEmpty()) return emptyList()
+    val pieces = mutableListOf<MarkdownPiece>()
+    val text = mutableListOf<String>()
+    val code = mutableListOf<String>()
+    var inCode = false
+    fun flushText() {
+        if (text.isEmpty()) return
+        pieces += splitImagesAndQuotes(text.joinToString("\n"))
+        text.clear()
+    }
+    fun flushCode() {
+        pieces += MarkdownPiece.Code(code.joinToString("\n"))
+        code.clear()
+    }
+    for (line in markdown.lines()) {
+        if (isCodeFenceLine(line)) {
+            if (inCode) flushCode() else flushText()
+            inCode = !inCode
+            continue
+        }
+        if (inCode) code += line else text += line
+    }
+    if (inCode) flushCode() else flushText()
+    return pieces
+}
+
+private fun isCodeFenceLine(line: String): Boolean {
+    val trimmed = line.trim()
+    if (!trimmed.startsWith("```")) return false
+    val info = trimmed.removePrefix("```")
+    return info.isEmpty() || info.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '+' }
+}
+
+private fun splitImagesAndQuotes(markdown: String): List<MarkdownPiece> {
+    if (markdown.isBlank()) return emptyList()
     val pieces = mutableListOf<MarkdownPiece>()
     var cursor = 0
     imageMarkdown.findAll(markdown).forEach { match ->
@@ -157,8 +202,33 @@ private fun splitQuotes(markdown: String): List<MarkdownPiece> {
 
 private fun richLayout(markdown: String, width: Int, metrics: DisplayMetrics): StaticLayout {
     val state = RichTextState().apply { setMarkdown(ensureRichLinkBoundaries(markdown)) }
-    return staticLayout(state.annotatedString.toExportSpannable(metrics), width, bodyPaint())
+    return staticLayout(
+        state.annotatedString.toExportSpannable(metrics, inlineCodeRanges(state)),
+        width,
+        bodyPaint(),
+    )
 }
+
+/** Rangos del texto ya interpretado que la vista pinta como cápsula de `código`. */
+private fun inlineCodeRanges(state: RichTextState): List<IntRange> {
+    val text = state.annotatedString.text
+    if (text.isEmpty()) return emptyList()
+    val ranges = mutableListOf<IntRange>()
+    var start = -1
+    for (index in text.indices) {
+        val isCode = state.getRichSpanStyle(TextRange(index + 1)) is RichSpanStyle.Code
+        if (isCode && start < 0) start = index
+        if (!isCode && start >= 0) {
+            ranges += start until index
+            start = -1
+        }
+    }
+    if (start >= 0) ranges += start until text.length
+    return ranges
+}
+
+/** Marca de la cápsula. No cambia el texto; el PDF la dibuja al pintar el layout. */
+private class InlineCodeSpan
 
 private fun layoutOf(text: String, paint: TextPaint, metrics: DisplayMetrics, width: Int): StaticLayout {
     val span = SpannableStringBuilder(text)
@@ -182,17 +252,33 @@ private fun staticLayout(text: CharSequence, width: Int, paint: TextPaint): Stat
         .build()
 }
 
-private fun AnnotatedString.toExportSpannable(metrics: DisplayMetrics): CharSequence {
+private fun AnnotatedString.toExportSpannable(
+    metrics: DisplayMetrics,
+    codeRanges: List<IntRange>,
+): CharSequence {
     val paragraphs = paragraphStyles
-    if (paragraphs.isEmpty()) return slice(0, text.length, null, metrics)
+    if (paragraphs.isEmpty()) return slice(0, text.length, null, metrics).marked(codeRanges, 0, text.length)
     val out = SpannableStringBuilder()
     paragraphs.forEachIndexed { index, range ->
         var end = range.end.coerceAtMost(text.length)
         if (index != paragraphs.lastIndex && end > range.start && text[end - 1] == ' ') end--
-        if (end > range.start) out.append(slice(range.start, end, range.item, metrics))
+        if (end > range.start) out.append(slice(range.start, end, range.item, metrics).marked(codeRanges, range.start, end))
         if (index != paragraphs.lastIndex) out.append('\n')
     }
     return out.ifEmpty { "" }
+}
+
+private fun CharSequence.marked(codeRanges: List<IntRange>, annotatedStart: Int, annotatedEnd: Int): CharSequence {
+    if (codeRanges.isEmpty() || this !is SpannableStringBuilder || isEmpty()) return this
+    for (range in codeRanges) {
+        val from = maxOf(range.first, annotatedStart)
+        val to = minOf(range.last + 1, annotatedEnd)
+        val localStart = from - annotatedStart
+        val localEnd = to - annotatedStart
+        if (localStart < 0 || localEnd > length || localStart >= localEnd) continue
+        setSpan(InlineCodeSpan(), localStart, localEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+    return this
 }
 
 private fun AnnotatedString.slice(
@@ -290,6 +376,12 @@ private fun bodyPaint(): TextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
     textSize = BODY_SP
 }
 
+private fun codePaint(): TextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.BLACK
+    textSize = BODY_SP
+    typeface = Typeface.MONOSPACE
+}
+
 private fun titlePaint(): TextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
     color = Color.BLACK
     textSize = 22f
@@ -308,6 +400,12 @@ private class PdfPageWriter(
     private var pageNumber = 0
     private var y = PAGE_MARGIN
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = QUOTE_COLOR }
+    private val codeBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF3F4F6.toInt() }
+    private val codeCapsulePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.LTGRAY
+        style = Paint.Style.STROKE
+        strokeWidth = 1f
+    }
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
     fun gap(amount: Int) {
@@ -349,11 +447,123 @@ private class PdfPageWriter(
             }
             canvas.save()
             canvas.translate(textLeft.toFloat(), (y - top).toFloat())
-            canvas.clipRect(0, top, layout.width, layout.getLineBottom(end))
+            val sliceBottom = layout.getLineBottom(end)
+            canvas.save()
+            canvas.clipRect(
+                -CODE_CAPSULE_PAD,
+                top - CODE_CAPSULE_PAD,
+                layout.width + CODE_CAPSULE_PAD,
+                sliceBottom + CODE_CAPSULE_PAD,
+            )
+            drawInlineCodeCapsules(canvas, layout, line, end)
+            canvas.restore()
+            canvas.clipRect(0, top, layout.width, sliceBottom)
             layout.draw(canvas)
             canvas.restore()
             y += sliceHeight
             line = end + 1
+            if (line < layout.lineCount) finishPage()
+        }
+    }
+
+    private fun drawInlineCodeCapsules(canvas: Canvas, layout: StaticLayout, firstLine: Int, lastLine: Int) {
+        val text = layout.text as? Spanned ?: return
+        val spans = text.getSpans(0, text.length, InlineCodeSpan::class.java)
+        val path = Path()
+        for (span in spans) {
+            val start = text.getSpanStart(span)
+            val end = text.getSpanEnd(span)
+            if (start < 0 || end <= start) continue
+            val spanStartLine = layout.getLineForOffset(start)
+            val spanEndLine = layout.getLineForOffset(end - 1)
+            if (spanEndLine < firstLine || spanStartLine > lastLine) continue
+            for (lineIndex in maxOf(spanStartLine, firstLine)..minOf(spanEndLine, lastLine)) {
+                val lineStart = layout.getLineStart(lineIndex)
+                val lineEnd = layout.getLineEnd(lineIndex)
+                val from = maxOf(start, lineStart)
+                val to = minOf(end, lineEnd)
+                if (from >= to) continue
+                val left = layout.getPrimaryHorizontal(from)
+                val right = if (to >= lineEnd) layout.getLineRight(lineIndex) else layout.getPrimaryHorizontal(to)
+                val boxLeft = minOf(left, right) - CODE_CAPSULE_PAD
+                val boxRight = maxOf(left, right) + CODE_CAPSULE_PAD
+                if (boxRight - boxLeft <= CODE_CAPSULE_PAD) continue
+                val first = lineIndex == layout.getLineForOffset(start)
+                val last = lineIndex == layout.getLineForOffset(end - 1)
+                val radius = CODE_CAPSULE_RADIUS
+                val radii = floatArrayOf(
+                    if (first) radius else 0f, if (first) radius else 0f,
+                    if (last) radius else 0f, if (last) radius else 0f,
+                    if (last) radius else 0f, if (last) radius else 0f,
+                    if (first) radius else 0f, if (first) radius else 0f,
+                )
+                path.reset()
+                path.addRoundRect(
+                    RectF(
+                        boxLeft,
+                        layout.getLineTop(lineIndex) - CODE_CAPSULE_PAD,
+                        boxRight,
+                        layout.getLineBottom(lineIndex) + CODE_CAPSULE_PAD,
+                    ),
+                    radii,
+                    Path.Direction.CW,
+                )
+                canvas.drawPath(path, codeCapsulePaint)
+            }
+        }
+    }
+
+    fun drawCode(text: String, metrics: DisplayMetrics) {
+        val pad = dp(metrics, 10f)
+        val radius = dp(metrics, 6f).toFloat()
+        val layout = layoutOf(
+            text.ifBlank { " " },
+            codePaint(),
+            metrics,
+            (contentWidth - pad * 2).coerceAtLeast(1),
+        )
+        var line = 0
+        var topPad = pad
+        while (line < layout.lineCount) {
+            ensurePage()
+            val lineHeight = (layout.getLineBottom(line) - layout.getLineTop(line)).coerceAtLeast(1)
+            if (topPad + lineHeight > contentBottom - y && y > PAGE_MARGIN) {
+                finishPage()
+                continue
+            }
+            val top = layout.getLineTop(line)
+            val room = contentBottom - y - topPad
+            var end = line
+            while (end + 1 < layout.lineCount && layout.getLineBottom(end + 1) - top <= room) {
+                end++
+            }
+            val sliceHeight = (layout.getLineBottom(end) - top).coerceAtLeast(1)
+            val bottomPad = if (end == layout.lineCount - 1) {
+                pad.coerceAtMost((contentBottom - y - topPad - sliceHeight).coerceAtLeast(0))
+            } else {
+                0
+            }
+            val canvas = canvas()
+            val bottom = y + topPad + sliceHeight + bottomPad
+            canvas.drawRoundRect(
+                RectF(
+                    PAGE_MARGIN.toFloat(),
+                    y.toFloat(),
+                    (PAGE_WIDTH - PAGE_MARGIN).toFloat(),
+                    bottom.toFloat(),
+                ),
+                radius,
+                radius,
+                codeBackgroundPaint,
+            )
+            canvas.save()
+            canvas.translate((PAGE_MARGIN + pad).toFloat(), (y + topPad - top).toFloat())
+            canvas.clipRect(0, top, layout.width, layout.getLineBottom(end).coerceAtLeast(top + 1))
+            layout.draw(canvas)
+            canvas.restore()
+            y = bottom
+            line = end + 1
+            topPad = 0
             if (line < layout.lineCount) finishPage()
         }
     }
