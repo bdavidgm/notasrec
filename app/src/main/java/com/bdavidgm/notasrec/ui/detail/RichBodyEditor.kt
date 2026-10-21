@@ -60,12 +60,15 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -86,6 +89,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.style.TextAlign
@@ -245,9 +249,11 @@ private val quoteParagraphStyle = ParagraphStyle(
     textIndent = TextIndent(firstLine = 10.sp, restLine = 10.sp),
 )
 private val quoteMarkerStyle = SpanStyle(color = CelesteOscuro)
+private val codeBlockBackground = Color(0xFFDCE8EE)
+private val codeBlockBorder = Color(0xFF9FBAC8)
 private val codeSpanStyle = SpanStyle(
     fontFamily = FontFamily.Monospace,
-    background = Color(0xFFF3F4F6),
+    background = codeBlockBackground,
 )
 private val inlineCodeStyle = RichSpanStyle.Code()
 private val inlineCodeLine = Regex("^`([^`]*)`$")
@@ -392,6 +398,41 @@ private fun renderCodeBlocks(state: RichTextState) {
     }
     state.selection = previousSelection
     if (isInCodeParagraph(state)) state.addSpanStyle(codeSpanStyle)
+}
+
+/** Líneas visuales ocupadas por bloques ```; permite pintarlas sin separar el editor. */
+private fun codeBlockLineRanges(
+    text: AnnotatedString,
+    layout: TextLayoutResult,
+): List<IntRange> {
+    if (text.isEmpty() || layout.lineCount == 0) return emptyList()
+    val paragraphs = text.paragraphStyles
+        .filter { text.text.startsWith(CODE_MARKER, it.start) }
+        .ifEmpty {
+            if (text.text.startsWith(CODE_MARKER)) {
+                listOf(AnnotatedString.Range(ParagraphStyle(), 0, text.length))
+            } else {
+                emptyList()
+            }
+        }
+    val lines = paragraphs.mapNotNull { paragraph ->
+        if (paragraph.start >= text.length) return@mapNotNull null
+        val start = paragraph.start.coerceIn(0, text.length - 1)
+        val end = (paragraph.end - 1).coerceIn(start, text.length - 1)
+        layout.getLineForOffset(start)..layout.getLineForOffset(end)
+    }.sortedBy { it.first }
+    if (lines.isEmpty()) return emptyList()
+
+    val merged = mutableListOf<IntRange>()
+    lines.forEach { range ->
+        val previous = merged.lastOrNull()
+        if (previous != null && range.first <= previous.last + 1) {
+            merged[merged.lastIndex] = previous.first..maxOf(previous.last, range.last)
+        } else {
+            merged += range
+        }
+    }
+    return merged
 }
 
 private fun isInInlineCodeParagraph(state: RichTextState): Boolean =
@@ -1061,6 +1102,7 @@ private fun BodyTextBlock(
     var lastKnown by remember { mutableStateOf(exportEditorMarkdown(state.toPureMarkdown())) }
     val interactionSource = remember { MutableInteractionSource() }
     val focusRequester = remember { FocusRequester() }
+    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val currentOnEdited by rememberUpdatedState(onEdited)
     val currentOnFlush by rememberUpdatedState(onFlush)
     val currentOnBackspace by rememberUpdatedState(onBackspaceAtStart)
@@ -1187,6 +1229,26 @@ private fun BodyTextBlock(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = if (isLast) 120.dp else 24.dp)
+            .drawBehind {
+                val layout = textLayout ?: return@drawBehind
+                codeBlockLineRanges(state.annotatedString, layout).forEach { lines ->
+                    val top = layout.getLineTop(lines.first)
+                    val bottom = layout.getLineBottom(lines.last)
+                    drawRoundRect(
+                        color = codeBlockBackground,
+                        topLeft = Offset(0f, top),
+                        size = Size(size.width, (bottom - top).coerceAtLeast(1f)),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()),
+                    )
+                    drawRoundRect(
+                        color = codeBlockBorder,
+                        topLeft = Offset(0f, top),
+                        size = Size(size.width, (bottom - top).coerceAtLeast(1f)),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()),
+                        style = Stroke(width = 1.dp.toPx()),
+                    )
+                }
+            }
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) {
@@ -1219,6 +1281,7 @@ private fun BodyTextBlock(
             }
             .onFocusChanged { if (it.isFocused) onFocused(state) },
         singleParagraph = false,
+        onTextLayout = { textLayout = it },
         textStyle = MaterialTheme.typography.bodyLarge.copy(color = NegroTexto),
         interactionSource = interactionSource,
         cursorBrush = SolidColor(NegroTexto),
@@ -1374,7 +1437,8 @@ private fun ReadOnlyTextBlock(markdown: String) {
                     text = piece.markdown.ifBlank { " " },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFFF3F4F6), RoundedCornerShape(6.dp))
+                        .background(codeBlockBackground, RoundedCornerShape(6.dp))
+                        .border(1.dp, codeBlockBorder, RoundedCornerShape(6.dp))
                         .padding(10.dp),
                     style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
                     color = NegroTexto,
